@@ -217,13 +217,31 @@ def embed_data(db_url, embed_provider, embed_model, embed_key, embed_host):
     COLLECTION_NAME = "case_law"
 
     print(f"Upserting {len(chunks)} chunks into PostgreSQL Vector Database...")
+    
+    import concurrent.futures
+    
+    # Initialize the table and delete old collection using just the first chunk
     db = PGVector.from_documents(
         embedding=embeddings,
-        documents=chunks,
+        documents=chunks[:1],
         collection_name=COLLECTION_NAME,
         connection_string=CONNECTION_STRING,
         pre_delete_collection=True
     )
+    
+    remaining_chunks = chunks[1:]
+    if remaining_chunks:
+        batch_size = 200
+        batches = [remaining_chunks[i:i + batch_size] for i in range(0, len(remaining_chunks), batch_size)]
+        
+        print(f"Spawning 10 threads to insert {len(batches)} batches concurrently...")
+        
+        def process_batch(batch):
+            db.add_documents(batch)
+            
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            list(tqdm(executor.map(process_batch, batches), total=len(batches), desc="Concurrent Embedding & Inserting"))
+            
     print("Embedding complete. Your Vector Database is fully primed.")
     
     print("Running db_setup to add Hybrid Search FTS indices and other tables...")
@@ -260,6 +278,18 @@ def main():
     cli_db_url = f"postgresql+psycopg2://{args.pg_user}:{args.pg_password}@{args.pg_host}:{args.pg_port}/{args.pg_db}"
     # Prefer DATABASE_URL env var if set, otherwise fallback to CLI
     db_url = os.getenv("DATABASE_URL", cli_db_url)
+    
+    print(f"Testing connection to PostgreSQL database at {args.pg_host}:{args.pg_port}...")
+    try:
+        import psycopg2
+        db_url_clean = db_url.replace("+psycopg2", "")
+        conn = psycopg2.connect(db_url_clean)
+        conn.close()
+        print("✅ Successfully connected to PostgreSQL!")
+    except Exception as e:
+        print(f"❌ Failed to connect to PostgreSQL: {e}")
+        print("Please ensure PostgreSQL is running and the credentials are correct before starting.")
+        return
 
     if args.action in ["download", "all"]:
         if args.source == "hf":
