@@ -690,7 +690,18 @@ function App() {
                   {(() => {
                     let parsed = null;
                     try {
-                      parsed = JSON.parse(selectedCase.full_text);
+                      let rawText = selectedCase.full_text;
+                      // Clean up unescaped control characters from postgres json dumps
+                      rawText = rawText.replace(/[\u0000-\u001F]+/g, (match) => {
+                        return match.split('').map(char => {
+                          if (char === '\n') return '\\n';
+                          if (char === '\r') return '\\r';
+                          if (char === '\t') return '\\t';
+                          if (char === '\f') return '\\f';
+                          return '';
+                        }).join('');
+                      });
+                      parsed = JSON.parse(rawText);
                     } catch (e) {
                       // Fallback if not JSON
                     }
@@ -703,8 +714,10 @@ function App() {
                             <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '12px 16px', fontSize: '0.95rem' }}>
                               {parsed.case_name_full && <><span style={{ color: 'var(--text-muted)' }}>Case Name:</span><span>{parsed.case_name_full}</span></>}
                               {parsed.date_filed && <><span style={{ color: 'var(--text-muted)' }}>Date Filed:</span><span>{parsed.date_filed}</span></>}
+                              {parsed.court_full_name && <><span style={{ color: 'var(--text-muted)' }}>Court:</span><span>{parsed.court_full_name}</span></>}
                               {parsed.judges && <><span style={{ color: 'var(--text-muted)' }}>Judges:</span><span>{parsed.judges}</span></>}
                               {parsed.attorneys && <><span style={{ color: 'var(--text-muted)' }}>Attorneys:</span><span>{parsed.attorneys}</span></>}
+                              {parsed.citations && parsed.citations.length > 0 && <><span style={{ color: 'var(--text-muted)' }}>Citations:</span><span>{parsed.citations.join(', ')}</span></>}
                             </div>
                           </div>
                           
@@ -726,6 +739,13 @@ function App() {
                             <div>
                               <h3 style={{ color: 'var(--accent)' }}>Headnotes</h3>
                               <ReactMarkdown>{parsed.headnotes}</ReactMarkdown>
+                            </div>
+                          )}
+
+                          {parsed.headmatter && (
+                            <div>
+                              <h3 style={{ color: 'var(--accent)' }}>Headmatter</h3>
+                              <ReactMarkdown>{parsed.headmatter}</ReactMarkdown>
                             </div>
                           )}
                           
