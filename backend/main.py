@@ -236,13 +236,15 @@ def _run_search_pipeline(req: QueryRequest):
 
     hybrid_search_sql = f"""
         SELECT 
-            document, 
-            cmetadata, 
-            embedding <=> {vector_query} AS vector_distance,
-            ts_rank_cd(tsvector_doc, plainto_tsquery('english', %s)) AS fts_rank
-        FROM langchain_pg_embedding
-        WHERE 1=1 {filter_sql}
-        ORDER BY (embedding <=> {vector_query}) ASC, fts_rank DESC
+            e.document, 
+            e.cmetadata, 
+            e.embedding <=> {vector_query} AS vector_distance,
+            ts_rank_cd(e.tsvector_doc, plainto_tsquery('english', %s)) AS fts_rank,
+            substring(f.full_text from '"case_name_full":\s*"([^"]+)"') AS case_name_full
+        FROM langchain_pg_embedding e
+        LEFT JOIN full_cases f ON (e.cmetadata->>'case_id') = f.case_id
+        WHERE 1=1 {filter_sql.replace('cmetadata', 'e.cmetadata')}
+        ORDER BY (e.embedding <=> {vector_query}) ASC, e.fts_rank DESC
         LIMIT 30;
     """
     
@@ -283,7 +285,7 @@ def _run_search_pipeline(req: QueryRequest):
         status = meta.get('status', 'good_law')
         sources.append({
             "case_id": meta.get('case_id'),
-            "name": meta.get('name', f"Case from {meta.get('year', 'Unknown')}"),
+            "name": row.get('case_name_full') or meta.get('name', f"Case from {meta.get('year', 'Unknown')}"),
             "reporter": meta.get('court', 'Unknown Court'),
             "text": row['document'][:200] + "...",
             "status": status,
@@ -359,7 +361,7 @@ def list_cases(
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     
-    query = "SELECT case_id, name, reporter, court, jurisdiction, year, status FROM full_cases WHERE 1=1"
+    query = "SELECT case_id, COALESCE(substring(full_text from '\"case_name_full\":\s*\"([^\"]+)\"'), name) as name, reporter, court, jurisdiction, year, status FROM full_cases WHERE 1=1"
     params = []
     
     if search:
