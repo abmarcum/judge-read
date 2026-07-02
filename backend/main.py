@@ -27,6 +27,7 @@ class QueryRequest(BaseModel):
     query: str
     session_id: Optional[str] = None
     embedding_model: str = "text-embedding-3-small"
+    embedding_key: Optional[str] = ""
     llm_engine: str = "claude"
     api_key: str = ""
     # Metadata filters
@@ -53,35 +54,11 @@ class ConfigModel(BaseModel):
     apiKey: Optional[str] = ""
     langsmithKey: Optional[str] = ""
     cohereKey: Optional[str] = ""
-    pgHost: Optional[str] = "localhost"
-    pgPort: Optional[str] = "5432"
-    pgUser: Optional[str] = "user"
-    pgPassword: Optional[str] = "password"
-    pgDb: Optional[str] = "judgeread"
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
 def get_db_connection():
-    pg_host = "localhost"
-    pg_port = "5432"
-    pg_user = "user"
-    pg_password = "password"
-    pg_db = "judgeread"
-    
-    if os.path.exists(CONFIG_PATH):
-        try:
-            with open(CONFIG_PATH, "r") as f:
-                cfg = json.load(f)
-                pg_host = cfg.get("pgHost") or pg_host
-                pg_port = cfg.get("pgPort") or pg_port
-                pg_user = cfg.get("pgUser") or pg_user
-                pg_password = cfg.get("pgPassword") or pg_password
-                pg_db = cfg.get("pgDb") or pg_db
-        except Exception:
-            pass
-            
-    db_url_from_config = f"postgresql://{pg_user}:{pg_password}@{pg_host}:{pg_port}/{pg_db}"
-    db_url = os.getenv("DATABASE_URL", db_url_from_config).replace("+psycopg2", "")
+    db_url = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/judgeread").replace("+psycopg2", "")
     return psycopg2.connect(db_url)
 
 @app.get("/health")
@@ -164,7 +141,7 @@ CONTEXT:
         if llm_engine.startswith("claude"):
             llm = ChatAnthropic(model_name=actual_model, anthropic_api_key=api_key)
         elif llm_engine == "ollama":
-            llm = ChatOllama(model="llama3", base_url=api_key)
+            llm = ChatOllama(model="qwen3-coder", base_url=api_key)
         else:
             llm = ChatOpenAI(model=actual_model, api_key=api_key)
             
@@ -193,13 +170,18 @@ def _run_search_pipeline(req: QueryRequest):
     
     # Create Embedding for the query
     try:
-        if req.api_key:
-            os.environ["OPENAI_API_KEY"] = req.api_key
-        embeddings = OpenAIEmbeddings(model=req.embedding_model)
+        if req.embedding_model == "ollama":
+            from langchain_ollama import OllamaEmbeddings
+            embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=req.embedding_key)
+        else:
+            if req.embedding_key:
+                os.environ["OPENAI_API_KEY"] = req.embedding_key
+            embeddings = OpenAIEmbeddings(model=req.embedding_model)
+            
         query_embedding = embeddings.embed_query(req.query)
     except Exception as e:
         print(f"Embedding failed (using mock vector): {e}")
-        query_embedding = [0.0] * 1536
+        query_embedding = [0.0] * 1536 if req.embedding_model != "ollama" else [0.0] * 768
         
     # Hybrid Search Query + Metadata Filtering
     vector_query = f"'[{','.join(map(str, query_embedding))}]'"
