@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
-import { Search, Settings, Send, Scale, ChevronRight, X, Loader2, BookOpen } from 'lucide-react';
+import { Search, Settings, Send, Scale, ChevronRight, X, Loader2, Book } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import './index.css';
 
@@ -18,12 +18,6 @@ function App() {
   const [selectedCase, setSelectedCase] = useState(null);
   const [isCaseLoading, setIsCaseLoading] = useState(false);
 
-  // Explorer State
-  const [isExplorerOpen, setIsExplorerOpen] = useState(false);
-  const [explorerCases, setExplorerCases] = useState([]);
-  const [isExplorerLoading, setIsExplorerLoading] = useState(false);
-  const [explorerSearch, setExplorerSearch] = useState('');
-
   // Settings state
   const [embeddingModel, setEmbeddingModel] = useState('text-embedding-3-small');
   const [embeddingKey, setEmbeddingKey] = useState('');
@@ -39,24 +33,21 @@ function App() {
   const [filterJudge, setFilterJudge] = useState('');
   const [filterTopic, setFilterTopic] = useState('');
   
-  
   // Tracing
   const [langsmithKey, setLangsmithKey] = useState('');
   const [cohereKey, setCohereKey] = useState('');
   
-  // Postgres Settings
-  const [pgHost, setPgHost] = useState('localhost');
-  const [pgPort, setPgPort] = useState('5432');
-  const [pgUser, setPgUser] = useState('user');
-  const [pgPassword, setPgPassword] = useState('password');
-  const [pgDb, setPgDb] = useState('judgeread');
-  
   const [isConfigLoaded, setIsConfigLoaded] = useState(false);
+
+  // Case Explorer State
+  const [isExplorerOpen, setIsExplorerOpen] = useState(false);
+  const [explorerSearch, setExplorerSearch] = useState('');
+  const [explorerCases, setExplorerCases] = useState([]);
+  const [isExplorerLoading, setIsExplorerLoading] = useState(false);
 
   useEffect(() => {
     // Load initial config from backend
-    const API_BASE = `http://${window.location.hostname}:8000`;
-    axios.get(`${API_BASE}/api/config`).then((response) => {
+    axios.get('http://localhost:8000/api/config').then((response) => {
       const data = response.data;
       if (data.embeddingModel) setEmbeddingModel(data.embeddingModel);
       if (data.embeddingKey) setEmbeddingKey(data.embeddingKey);
@@ -64,11 +55,6 @@ function App() {
       if (data.apiKey) setApiKey(data.apiKey);
       if (data.langsmithKey) setLangsmithKey(data.langsmithKey);
       if (data.cohereKey) setCohereKey(data.cohereKey);
-      if (data.pgHost) setPgHost(data.pgHost);
-      if (data.pgPort) setPgPort(data.pgPort);
-      if (data.pgUser) setPgUser(data.pgUser);
-      if (data.pgPassword) setPgPassword(data.pgPassword);
-      if (data.pgDb) setPgDb(data.pgDb);
       setIsConfigLoaded(true);
     }).catch((err) => {
       console.error("Could not load config", err);
@@ -79,22 +65,42 @@ function App() {
   useEffect(() => {
     // Save config whenever it changes
     if (isConfigLoaded) {
-      const API_BASE = `http://${window.location.hostname}:8000`;
-      axios.post(`${API_BASE}/api/config`, {
+      axios.post('http://localhost:8000/api/config', {
         embeddingModel,
         embeddingKey,
         llmEngine,
         apiKey,
         langsmithKey,
-        cohereKey,
-        pgHost,
-        pgPort,
-        pgUser,
-        pgPassword,
-        pgDb
+        cohereKey
       }).catch(err => console.error("Failed to save config", err));
     }
-  }, [embeddingModel, embeddingKey, llmEngine, apiKey, langsmithKey, cohereKey, pgHost, pgPort, pgUser, pgPassword, pgDb, isConfigLoaded]);
+  }, [embeddingModel, embeddingKey, llmEngine, apiKey, langsmithKey, cohereKey, isConfigLoaded]);
+
+  const fetchCases = async () => {
+    setIsExplorerLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (explorerSearch) params.append('search', explorerSearch);
+      if (filterYear) params.append('year', filterYear);
+      if (filterCourt) params.append('court', filterCourt);
+      if (filterSystem === 'Federal') params.append('system', 'Federal');
+      if (filterSystem === 'State') params.append('system', filterState || 'State');
+      if (filterStatus) params.append('status', filterStatus);
+
+      const response = await axios.get(`http://localhost:8000/api/cases?${params.toString()}`);
+      setExplorerCases(response.data.cases || []);
+    } catch (err) {
+      console.error("Failed to fetch cases:", err);
+    } finally {
+      setIsExplorerLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isExplorerOpen) {
+      fetchCases();
+    }
+  }, [isExplorerOpen, explorerSearch, filterYear, filterCourt, filterSystem, filterState, filterStatus]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -109,8 +115,7 @@ function App() {
     setIsCaseLoading(true);
     setSelectedCase(null);
     try {
-      const API_BASE = `http://${window.location.hostname}:8000`;
-      const response = await axios.get(`${API_BASE}/api/cases/${caseId}`);
+      const response = await axios.get(`http://localhost:8000/api/cases/${caseId}`);
       setSelectedCase(response.data);
     } catch (error) {
       console.error("Failed to fetch full case", error);
@@ -119,32 +124,6 @@ function App() {
       setIsCaseLoading(false);
     }
   };
-
-  const fetchCases = async (searchQuery = '') => {
-    setIsExplorerLoading(true);
-    try {
-      const API_BASE = `http://${window.location.hostname}:8000`;
-      let url = `${API_BASE}/api/cases?search=${encodeURIComponent(searchQuery)}`;
-      if (filterSystem) url += `&system=${encodeURIComponent(filterSystem)}`;
-      if (filterState) url += `&state=${encodeURIComponent(filterState)}`;
-      if (filterCourt) url += `&court=${encodeURIComponent(filterCourt)}`;
-      if (filterStatus) url += `&status=${encodeURIComponent(filterStatus)}`;
-      if (filterYear) url += `&year=${encodeURIComponent(filterYear)}`;
-      
-      const response = await axios.get(url);
-      setExplorerCases(response.data.cases);
-    } catch (error) {
-      console.error("Failed to fetch cases", error);
-    } finally {
-      setIsExplorerLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (isExplorerOpen) {
-      fetchCases(explorerSearch);
-    }
-  }, [isExplorerOpen, explorerSearch, filterSystem, filterState, filterCourt, filterStatus, filterYear]);
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -156,8 +135,7 @@ function App() {
     setIsLoading(true);
 
     try {
-      const API_BASE = `http://${window.location.hostname}:8000`;
-      const response = await axios.post(`${API_BASE}/api/search`, {
+      const response = await axios.post('http://localhost:8000/api/search', {
         query: userMessage.content,
         session_id: sessionId,
         embedding_model: embeddingModel,
@@ -184,8 +162,11 @@ function App() {
         sources: response.data.sources
       }]);
     } catch (error) {
-      console.error("Query failed", error);
-      setMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, I encountered an error. Is the backend running?' }]);
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: 'I encountered an error connecting to the retrieval system. Please check your backend.',
+        error: true
+      }]);
     } finally {
       setIsLoading(false);
     }
@@ -318,7 +299,7 @@ function App() {
   );
 
   return (
-    <div className="app-container" style={{ display: 'flex', height: '100vh' }}>
+    <div className="app-container" style={{ display: 'flex', height: '100vh', position: 'relative' }}>
       
       {/* Sidebar / Settings */}
       <div className={`glass-panel settings-panel ${isSettingsOpen ? 'open' : ''}`} style={{
@@ -404,41 +385,11 @@ function App() {
               onChange={(e) => setLangsmithKey(e.target.value)} 
             />
           </div>
-
-          <div style={{ marginTop: '16px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-            <h3 style={{ fontSize: '1rem', fontWeight: 500, marginBottom: '12px' }}>PostgreSQL</h3>
-            
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-              <div style={{ flex: 2 }}>
-                <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Host</label>
-                <input type="text" className="input-glass" value={pgHost} onChange={(e) => setPgHost(e.target.value)} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Port</label>
-                <input type="text" className="input-glass" value={pgPort} onChange={(e) => setPgPort(e.target.value)} />
-              </div>
-            </div>
-            
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>User</label>
-                <input type="text" className="input-glass" value={pgUser} onChange={(e) => setPgUser(e.target.value)} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Password</label>
-                <input type="password" className="input-glass" value={pgPassword} onChange={(e) => setPgPassword(e.target.value)} />
-              </div>
-            </div>
-
-            <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Database</label>
-            <input type="text" className="input-glass" value={pgDb} onChange={(e) => setPgDb(e.target.value)} />
-          </div>
-
         </div>
       </div>
 
       {/* Main Chat Area */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', width: '100%', maxWidth: '1200px', margin: '0 auto' }}>
         
         {/* Header */}
         <header style={{ 
@@ -453,10 +404,10 @@ function App() {
           </div>
           <div style={{ display: 'flex', gap: '12px' }}>
             <button className="button-icon" onClick={() => setIsExplorerOpen(true)} title="Case Explorer">
-              <BookOpen size={24} />
+              <Book size={22} />
             </button>
             <button className="button-icon" onClick={() => setIsSettingsOpen(true)}>
-              <Settings size={24} />
+              <Settings size={22} />
             </button>
           </div>
         </header>
@@ -477,215 +428,11 @@ function App() {
                 boxShadow: msg.role === 'user' ? '0 4px 15px var(--accent-glow)' : '0 4px 15px rgba(0,0,0,0.2)',
                 borderBottomRightRadius: msg.role === 'user' ? '4px' : '16px',
                 borderTopLeftRadius: msg.role === 'assistant' ? '4px' : '16px',
-                lineHeight: '1.6',
-                overflowWrap: 'anywhere'
-              }} className="markdown-body">
-                <ReactMarkdown>{msg.content}</ReactMarkdown>
-              </div>
-              
-              {/* Sources render if assistant and has sources */}
-              {msg.sources && msg.sources.length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '4px' }}>
-                  {msg.sources.map((src, i) => (
-                    <div 
-                      key={i} 
-                      onClick={() => fetchFullCase(src.case_id)}
-                      style={{ 
-                        fontSize: '0.8rem', padding: '6px 12px', background: 'rgba(255,255,255,0.05)', 
-                        borderRadius: '20px', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '4px',
-                        color: 'var(--text-muted)', cursor: src.case_id ? 'pointer' : 'default',
-                        transition: 'all 0.2s ease'
-                      }}
-                      className={src.case_id ? 'hover-pill' : ''}
-                    >
-                      <ChevronRight size={14} /> {src.name} ({src.reporter})
-                      {src.overruled && (
-                        <span style={{ 
-                          background: 'rgba(255, 50, 50, 0.2)', color: '#ff6b6b', 
-                          padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', marginLeft: '4px' 
-                        }}>
-                          OVERRULED
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-          {isLoading && (
-            <div className="animate-fade-in" style={{ alignSelf: 'flex-start', padding: '16px 20px', borderRadius: '16px', background: 'var(--panel-bg)', border: '1px solid var(--border-color)' }}>
-              <Loader2 className="spinner" size={20} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent)' }} />
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', width: '100%' }}>
-      <select 
-        className="input-glass" 
-        value={filterSystem} 
-        onChange={(e) => {
-          setFilterSystem(e.target.value);
-          if (e.target.value !== 'State') setFilterState('');
-        }}
-        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '130px' }}
-      >
-        <option value="">Any System</option>
-        <option value="Federal">Federal Only</option>
-        <option value="State">State Only</option>
-      </select>
-
-      {filterSystem === 'State' && (
-        <select 
-          className="input-glass animate-fade-in" 
-          value={filterState} 
-          onChange={(e) => setFilterState(e.target.value)}
-          style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '150px' }}
-        >
-          <option value="">All States</option>
-          {["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming"].map(state => (
-            <option key={state} value={state}>{state}</option>
-          ))}
-        </select>
-      )}
-
-      <select 
-        className="input-glass" 
-        value={filterCourt} 
-        onChange={(e) => setFilterCourt(e.target.value)}
-        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '140px' }}
-      >
-        <option value="">Any Court Level</option>
-        {(filterSystem === '' || filterSystem === 'Federal') && (
-          <optgroup label="Federal Courts">
-            <option value="US Supreme Court">US Supreme Court</option>
-            <option value="US Court of Appeals (1st Circuit)">US Court of Appeals (1st Circuit)</option>
-            <option value="US Court of Appeals (2nd Circuit)">US Court of Appeals (2nd Circuit)</option>
-            <option value="US Court of Appeals (3rd Circuit)">US Court of Appeals (3rd Circuit)</option>
-            <option value="US Court of Appeals (4th Circuit)">US Court of Appeals (4th Circuit)</option>
-            <option value="US Court of Appeals (5th Circuit)">US Court of Appeals (5th Circuit)</option>
-            <option value="US Court of Appeals (6th Circuit)">US Court of Appeals (6th Circuit)</option>
-            <option value="US Court of Appeals (7th Circuit)">US Court of Appeals (7th Circuit)</option>
-            <option value="US Court of Appeals (8th Circuit)">US Court of Appeals (8th Circuit)</option>
-            <option value="US Court of Appeals (9th Circuit)">US Court of Appeals (9th Circuit)</option>
-            <option value="US Court of Appeals (10th Circuit)">US Court of Appeals (10th Circuit)</option>
-            <option value="US Court of Appeals (11th Circuit)">US Court of Appeals (11th Circuit)</option>
-            <option value="US Court of Appeals (DC Circuit)">US Court of Appeals (DC Circuit)</option>
-            <option value="US Court of Appeals (Federal Circuit)">US Court of Appeals (Federal Circuit)</option>
-            <option value="US District Court">US District Court</option>
-            <option value="US Bankruptcy Court">US Bankruptcy Court</option>
-            <option value="US Tax Court">US Tax Court</option>
-            <option value="US Court of Federal Claims">US Court of Federal Claims</option>
-            <option value="US Court of International Trade">US Court of International Trade</option>
-            <option value="US Court of Appeals for Veterans Claims">US Court of Appeals for Veterans Claims</option>
-            <option value="US Court of Appeals for the Armed Forces">US Court of Appeals for the Armed Forces</option>
-          </optgroup>
-        )}
-        {(filterSystem === '' || filterSystem === 'State') && (
-          <optgroup label="State Courts">
-            <option value="State Supreme Court">State Supreme Court</option>
-            <option value="State Court of Appeals">State Court of Appeals</option>
-            <option value="Superior Court">Superior Court</option>
-            <option value="Circuit Court">Circuit Court</option>
-            <option value="District Court">District Court</option>
-            <option value="Municipal Court">Municipal Court</option>
-            <option value="Justice Court">Justice Court</option>
-            <option value="Magistrate Court">Magistrate Court</option>
-            <option value="Family Court">Family Court</option>
-            <option value="Probate Court">Probate Court</option>
-            <option value="Juvenile Court">Juvenile Court</option>
-            <option value="Small Claims Court">Small Claims Court</option>
-            <option value="Traffic Court">Traffic Court</option>
-            <option value="Workers' Compensation Court">Workers' Compensation Court</option>
-          </optgroup>
-        )}
-      </select>
-
-      <select 
-        className="input-glass" 
-        value={filterTopic} 
-        onChange={(e) => setFilterTopic(e.target.value)}
-        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '140px' }}
-      >
-        <option value="">Any Topic</option>
-        <option value="Criminal">Criminal</option>
-        <option value="Civil">Civil</option>
-        <option value="Tax">Tax</option>
-        <option value="Intellectual Property">Intellectual Property</option>
-        <option value="Constitutional">Constitutional</option>
-      </select>
-
-      <input 
-        type="text"
-        className="input-glass" 
-        placeholder="Judge (e.g. Sotomayor)"
-        value={filterJudge} 
-        onChange={(e) => setFilterJudge(e.target.value)} 
-        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '150px' }}
-      />
-
-      <input 
-        type="number"
-        className="input-glass" 
-        placeholder="Year (e.g. 2015)"
-        value={filterYear} 
-        onChange={(e) => setFilterYear(e.target.value)} 
-        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '120px' }}
-      />
-
-      <select 
-        className="input-glass" 
-        value={filterStatus} 
-        onChange={(e) => setFilterStatus(e.target.value)}
-        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', color: filterStatus === 'good_law' ? '#51cf66' : 'inherit', flex: 1, minWidth: '150px' }}
-      >
-        <option value="">All Precedent</option>
-        <option value="good_law">Good Law Only</option>
-      </select>
-    </div>
-  );
-
-  return (
-    <div className="app-container" style={{ position: 'relative' }}>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', maxWidth: '1200px', margin: '0 auto', width: '100%' }}>
-        {/* Header */}
-        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '24px 32px', borderBottom: '1px solid var(--border-color)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <div style={{ background: 'var(--accent)', padding: '10px', borderRadius: '12px', display: 'flex', boxShadow: '0 4px 15px var(--accent-glow)' }}>
-              <Scale size={24} color="white" />
-            </div>
-            <h1 style={{ fontSize: '1.5rem', fontWeight: 600, letterSpacing: '-0.5px' }}>Judge Read</h1>
-          </div>
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <button className="button-icon" onClick={() => setIsExplorerOpen(true)} title="Case Explorer">
-              <BookOpen size={24} />
-            </button>
-            <button className="button-icon" onClick={() => setIsSettingsOpen(true)}>
-              <Settings size={24} />
-            </button>
-          </div>
-        </header>
-
-        {/* Chat History */}
-        <div className="scroll-smooth" style={{ flex: 1, overflowY: 'auto', padding: '32px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          {messages.map((msg, idx) => (
-            <div key={idx} className={`animate-fade-in ${msg.role === 'user' ? 'user-msg' : 'assistant-msg'}`} style={{
-              alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
-              maxWidth: '80%', display: 'flex', flexDirection: 'column', gap: '8px'
-            }}>
-              <div style={{ 
-                padding: '16px 20px', 
-                borderRadius: '16px',
-                background: msg.role === 'user' ? 'var(--accent)' : 'var(--panel-bg)',
-                border: msg.role === 'user' ? 'none' : '1px solid var(--border-color)',
-                color: msg.role === 'user' ? 'white' : 'var(--text-main)',
-                boxShadow: msg.role === 'user' ? '0 4px 15px var(--accent-glow)' : '0 4px 15px rgba(0,0,0,0.2)',
-                borderBottomRightRadius: msg.role === 'user' ? '4px' : '16px',
-                borderTopLeftRadius: msg.role === 'assistant' ? '4px' : '16px',
-                lineHeight: '1.6',
-                overflowWrap: 'anywhere'
-              }} className="markdown-body">
-                <ReactMarkdown>{msg.content}</ReactMarkdown>
+                lineHeight: '1.6'
+              }}>
+                <ReactMarkdown className="markdown-body">
+                  {msg.content}
+                </ReactMarkdown>
               </div>
               
               {/* Sources render if assistant and has sources */}
@@ -768,34 +515,32 @@ function App() {
         </div>
 
       </div>
-      
+
       {/* Case Explorer Modal */}
       {isExplorerOpen && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0, 0, 0, 0.7)', backdropFilter: 'blur(4px)',
+          background: 'rgba(0, 0, 0, 0.8)', backdropFilter: 'blur(8px)',
           zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          padding: '40px'
+          padding: '20px'
         }}>
           <div className="glass-panel animate-fade-in" style={{
-            width: '100%', maxWidth: '800px', height: '80vh', display: 'flex', flexDirection: 'column',
+            width: '100%', maxWidth: '1200px', height: '90vh', display: 'flex', flexDirection: 'column',
             background: 'var(--panel-bg)', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 20px 40px rgba(0,0,0,0.5)'
           }}>
-            <div style={{ padding: '24px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ padding: '24px 32px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <BookOpen size={24} color="var(--accent)" />
-                <h2 style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-main)', margin: 0 }}>
-                  Case Explorer
-                </h2>
+                <Book size={24} color="var(--accent)" />
+                <h2 style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-main)' }}>Case Explorer</h2>
               </div>
               <button className="button-icon" onClick={() => setIsExplorerOpen(false)}>
                 <X size={24} />
               </button>
             </div>
             
-            <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div style={{ flex: 1, position: 'relative' }}>
-                <Search size={18} color="var(--text-muted)" style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)' }} />
+            <div style={{ padding: '24px 32px', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+                <Search size={20} color="var(--text-muted)" style={{ position: 'absolute', marginLeft: '16px' }} />
                 <input 
                   type="text" 
                   value={explorerSearch}
@@ -805,6 +550,7 @@ function App() {
                   style={{ width: '100%', padding: '10px 16px 10px 44px', borderRadius: '8px' }}
                 />
               </div>
+              
               <FilterControls />
             </div>
 
@@ -815,7 +561,7 @@ function App() {
                 </div>
               ) : explorerCases.length === 0 ? (
                 <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                  No cases found.
+                  No cases found. Try adjusting your filters.
                 </div>
               ) : (
                 <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
@@ -860,7 +606,7 @@ function App() {
           </div>
         </div>
       )}
-
+      
       {/* Full Case Modal */}
       {(selectedCase || isCaseLoading) && (
         <div style={{
@@ -901,7 +647,7 @@ function App() {
                     try {
                       parsed = JSON.parse(selectedCase.full_text);
                     } catch (e) {
-                      // Not JSON, fallback to raw text
+                      // Fallback if not JSON
                     }
 
                     if (parsed) {
