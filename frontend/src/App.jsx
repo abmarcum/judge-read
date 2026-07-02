@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
-import { Search, Settings, Send, Scale, ChevronRight, X, Loader2 } from 'lucide-react';
+import { Search, Settings, Send, Scale, ChevronRight, X, Loader2, BookOpen } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import './index.css';
 
@@ -17,6 +17,12 @@ function App() {
   // Full Case Modal State
   const [selectedCase, setSelectedCase] = useState(null);
   const [isCaseLoading, setIsCaseLoading] = useState(false);
+
+  // Explorer State
+  const [isExplorerOpen, setIsExplorerOpen] = useState(false);
+  const [explorerCases, setExplorerCases] = useState([]);
+  const [isExplorerLoading, setIsExplorerLoading] = useState(false);
+  const [explorerSearch, setExplorerSearch] = useState('');
 
   // Settings state
   const [embeddingModel, setEmbeddingModel] = useState('text-embedding-3-small');
@@ -113,6 +119,25 @@ function App() {
       setIsCaseLoading(false);
     }
   };
+
+  const fetchCases = async (searchQuery = '') => {
+    setIsExplorerLoading(true);
+    try {
+      const API_BASE = `http://${window.location.hostname}:8000`;
+      const response = await axios.get(`${API_BASE}/api/cases?search=${encodeURIComponent(searchQuery)}`);
+      setExplorerCases(response.data.cases);
+    } catch (error) {
+      console.error("Failed to fetch cases", error);
+    } finally {
+      setIsExplorerLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isExplorerOpen) {
+      fetchCases(explorerSearch);
+    }
+  }, [isExplorerOpen, explorerSearch]);
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -296,9 +321,14 @@ function App() {
             </div>
             <h1 style={{ fontSize: '1.5rem', fontWeight: 600, letterSpacing: '-0.5px' }}>Judge Read</h1>
           </div>
-          <button className="button-icon" onClick={() => setIsSettingsOpen(true)}>
-            <Settings size={22} />
-          </button>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button className="button-icon" onClick={() => setIsExplorerOpen(true)} title="Case Explorer">
+              <BookOpen size={24} />
+            </button>
+            <button className="button-icon" onClick={() => setIsSettingsOpen(true)}>
+              <Settings size={24} />
+            </button>
+          </div>
         </header>
 
         {/* Chat History */}
@@ -526,6 +556,97 @@ function App() {
 
       </div>
       
+      {/* Case Explorer Modal */}
+      {isExplorerOpen && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0, 0, 0, 0.7)', backdropFilter: 'blur(4px)',
+          zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '40px'
+        }}>
+          <div className="glass-panel animate-fade-in" style={{
+            width: '100%', maxWidth: '800px', height: '80vh', display: 'flex', flexDirection: 'column',
+            background: 'var(--panel-bg)', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 20px 40px rgba(0,0,0,0.5)'
+          }}>
+            <div style={{ padding: '24px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <BookOpen size={24} color="var(--accent)" />
+                <h2 style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-main)', margin: 0 }}>
+                  Case Explorer
+                </h2>
+              </div>
+              <button className="button-icon" onClick={() => setIsExplorerOpen(false)}>
+                <X size={24} />
+              </button>
+            </div>
+            
+            <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '12px' }}>
+              <div style={{ flex: 1, position: 'relative' }}>
+                <Search size={18} color="var(--text-muted)" style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)' }} />
+                <input 
+                  type="text" 
+                  value={explorerSearch}
+                  onChange={(e) => setExplorerSearch(e.target.value)}
+                  placeholder="Search case name..."
+                  className="input-glass"
+                  style={{ width: '100%', padding: '10px 16px 10px 44px', borderRadius: '8px' }}
+                />
+              </div>
+            </div>
+
+            <div style={{ flex: 1, overflowY: 'auto', padding: '0' }}>
+              {isExplorerLoading ? (
+                <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+                  <Loader2 className="spinner" size={32} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent)' }} />
+                </div>
+              ) : explorerCases.length === 0 ? (
+                <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                  No cases found.
+                </div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                  <thead style={{ position: 'sticky', top: 0, background: 'var(--bg-main)', zIndex: 1 }}>
+                    <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                      <th style={{ padding: '16px 24px', color: 'var(--text-muted)', fontWeight: 500, fontSize: '0.9rem' }}>Case Name</th>
+                      <th style={{ padding: '16px 24px', color: 'var(--text-muted)', fontWeight: 500, fontSize: '0.9rem' }}>Year</th>
+                      <th style={{ padding: '16px 24px', color: 'var(--text-muted)', fontWeight: 500, fontSize: '0.9rem' }}>Court</th>
+                      <th style={{ padding: '16px 24px', color: 'var(--text-muted)', fontWeight: 500, fontSize: '0.9rem' }}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {explorerCases.map(c => (
+                      <tr 
+                        key={c.case_id} 
+                        onClick={() => fetchFullCase(c.case_id)}
+                        style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', cursor: 'pointer', transition: 'background 0.2s ease' }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <td style={{ padding: '16px 24px', color: 'var(--accent)', fontWeight: 500 }}>{c.name}</td>
+                        <td style={{ padding: '16px 24px' }}>{c.year}</td>
+                        <td style={{ padding: '16px 24px' }}>
+                          <div style={{ fontSize: '0.95rem' }}>{c.court}</div>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{c.jurisdiction}</div>
+                        </td>
+                        <td style={{ padding: '16px 24px' }}>
+                          {c.status === 'good_law' ? (
+                            <span style={{ color: '#51cf66', background: 'rgba(81, 207, 102, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem' }}>Good Law</span>
+                          ) : c.status === 'overruled' ? (
+                            <span style={{ color: '#ff6b6b', background: 'rgba(255, 107, 107, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem' }}>Overruled</span>
+                          ) : (
+                            <span style={{ color: '#fcc419', background: 'rgba(252, 196, 25, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem' }}>Caution</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Full Case Modal */}
       {(selectedCase || isCaseLoading) && (
         <div style={{
@@ -561,19 +682,66 @@ function App() {
                 </div>
               ) : (
                 <div className="markdown-body" style={{ overflowWrap: 'anywhere' }}>
-                  <ReactMarkdown>
-                    {(() => {
-                      try {
-                        const parsed = JSON.parse(selectedCase.full_text);
-                        if (parsed.opinions && parsed.opinions.length > 0) {
-                          return parsed.opinions.map(o => o.opinion_text).filter(Boolean).join("\\n\\n---\\n\\n");
-                        }
-                      } catch (e) {
-                        // Not JSON or missing opinions, fallback to raw text
-                      }
-                      return selectedCase.full_text;
-                    })()}
-                  </ReactMarkdown>
+                  {(() => {
+                    let parsed = null;
+                    try {
+                      parsed = JSON.parse(selectedCase.full_text);
+                    } catch (e) {
+                      // Not JSON, fallback to raw text
+                    }
+
+                    if (parsed) {
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                          <div style={{ background: 'rgba(255,255,255,0.02)', padding: '24px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                            <h3 style={{ marginTop: 0, color: 'var(--accent)', fontSize: '1.1rem' }}>Metadata</h3>
+                            <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '12px 16px', fontSize: '0.95rem' }}>
+                              {parsed.case_name_full && <><span style={{ color: 'var(--text-muted)' }}>Case Name:</span><span>{parsed.case_name_full}</span></>}
+                              {parsed.date_filed && <><span style={{ color: 'var(--text-muted)' }}>Date Filed:</span><span>{parsed.date_filed}</span></>}
+                              {parsed.judges && <><span style={{ color: 'var(--text-muted)' }}>Judges:</span><span>{parsed.judges}</span></>}
+                              {parsed.attorneys && <><span style={{ color: 'var(--text-muted)' }}>Attorneys:</span><span>{parsed.attorneys}</span></>}
+                            </div>
+                          </div>
+                          
+                          {parsed.summary && (
+                            <div>
+                              <h3 style={{ color: 'var(--accent)' }}>Summary</h3>
+                              <ReactMarkdown>{parsed.summary}</ReactMarkdown>
+                            </div>
+                          )}
+                          
+                          {parsed.syllabus && (
+                            <div>
+                              <h3 style={{ color: 'var(--accent)' }}>Syllabus</h3>
+                              <ReactMarkdown>{parsed.syllabus}</ReactMarkdown>
+                            </div>
+                          )}
+
+                          {parsed.headnotes && (
+                            <div>
+                              <h3 style={{ color: 'var(--accent)' }}>Headnotes</h3>
+                              <ReactMarkdown>{parsed.headnotes}</ReactMarkdown>
+                            </div>
+                          )}
+                          
+                          {parsed.opinions && parsed.opinions.length > 0 ? (
+                            <div>
+                              <h3 style={{ color: 'var(--accent)' }}>Opinions</h3>
+                              {parsed.opinions.map((o, idx) => (
+                                <div key={idx} style={{ marginTop: '16px' }}>
+                                  {o.author_str && <h4 style={{ color: 'var(--text-muted)' }}>Author: {o.author_str}</h4>}
+                                  <ReactMarkdown>{o.opinion_text}</ReactMarkdown>
+                                  {idx < parsed.opinions.length - 1 && <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '32px 0' }}/>}
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    }
+
+                    return <ReactMarkdown>{selectedCase.full_text}</ReactMarkdown>;
+                  })()}
                 </div>
               )}
             </div>

@@ -343,5 +343,18 @@ def get_full_case(case_id: str):
         
     return dict(case_row)
 
+@app.get("/api/cases")
+def list_cases(skip: int = 0, limit: int = 50, search: str = None):
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    if search:
+        cursor.execute("SELECT case_id, name, reporter, court, jurisdiction, year, status FROM full_cases WHERE name ILIKE %s ORDER BY year DESC NULLS LAST LIMIT %s OFFSET %s", (f"%{search}%", limit, skip))
+    else:
+        cursor.execute("SELECT case_id, name, reporter, court, jurisdiction, year, status FROM full_cases ORDER BY year DESC NULLS LAST LIMIT %s OFFSET %s", (limit, skip))
+    cases = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return {"cases": [dict(c) for c in cases]}
+
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
