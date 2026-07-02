@@ -560,8 +560,8 @@ function App() {
                   <Loader2 className="spinner" size={32} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent)' }} />
                 </div>
               ) : (
-                <div style={{ whiteSpace: 'pre-wrap' }}>
-                  {selectedCase.full_text}
+                <div className="markdown-body" style={{ overflowWrap: 'anywhere' }}>
+                  <ReactMarkdown>{selectedCase.full_text}</ReactMarkdown>
                 </div>
               )}
             </div>
