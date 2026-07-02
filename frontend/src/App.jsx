@@ -561,7 +561,19 @@ function App() {
                 </div>
               ) : (
                 <div className="markdown-body" style={{ overflowWrap: 'anywhere' }}>
-                  <ReactMarkdown>{selectedCase.full_text}</ReactMarkdown>
+                  <ReactMarkdown>
+                    {(() => {
+                      try {
+                        const parsed = JSON.parse(selectedCase.full_text);
+                        if (parsed.opinions && parsed.opinions.length > 0) {
+                          return parsed.opinions.map(o => o.opinion_text).filter(Boolean).join("\\n\\n---\\n\\n");
+                        }
+                      } catch (e) {
+                        // Not JSON or missing opinions, fallback to raw text
+                      }
+                      return selectedCase.full_text;
+                    })()}
+                  </ReactMarkdown>
                 </div>
               )}
             </div>
