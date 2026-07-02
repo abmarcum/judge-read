@@ -166,7 +166,7 @@ CONTEXT:
         if llm_engine.startswith("claude"):
             llm = ChatAnthropic(model_name=actual_model, anthropic_api_key=api_key)
         elif llm_engine == "ollama":
-            llm = ChatOllama(model="qwen3-coder", base_url=api_key)
+            llm = ChatOllama(model="qwen3.6:35b-a3b", base_url=api_key)
         else:
             llm = ChatOpenAI(model=actual_model, api_key=api_key)
             
