@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import { Search, Settings, Send, Scale, ChevronRight, X, Loader2 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 import './index.css';
 
 function App() {
@@ -316,9 +317,10 @@ function App() {
                 boxShadow: msg.role === 'user' ? '0 4px 15px var(--accent-glow)' : '0 4px 15px rgba(0,0,0,0.2)',
                 borderBottomRightRadius: msg.role === 'user' ? '4px' : '16px',
                 borderTopLeftRadius: msg.role === 'assistant' ? '4px' : '16px',
-                lineHeight: '1.6'
-              }}>
-                {msg.content}
+                lineHeight: '1.6',
+                overflowWrap: 'anywhere'
+              }} className="markdown-body">
+                <ReactMarkdown>{msg.content}</ReactMarkdown>
               </div>
               
               {/* Sources render if assistant and has sources */}

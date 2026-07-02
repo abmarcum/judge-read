@@ -10,6 +10,7 @@ from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import PGVector
+from langsmith import traceable
 
 # Constants
 COURTLISTENER_URL = "https://www.courtlistener.com/api/bulk-data/opinions/latest.tar.gz"
@@ -21,6 +22,7 @@ DOWNLOAD_PATH = os.path.join(DATA_ROOT, "courtlistener_opinions.tar.gz")
 EXTRACT_DIR = os.path.join(DATA_ROOT, "case_law_repository")
 HF_CACHE_DIR = os.path.join(DATA_ROOT, "huggingface_cache")
 
+@traceable(name="download_courtlistener", run_type="tool")
 def download_courtlistener(limit=None):
     """Download and extract CourtListener bulk data."""
     if os.path.exists(EXTRACT_DIR) and len(os.listdir(EXTRACT_DIR)) > 0:
@@ -64,20 +66,20 @@ def download_courtlistener(limit=None):
         os.remove(DOWNLOAD_PATH)
         print("Cleaned up compressed archive.")
 
+@traceable(name="download_huggingface", run_type="tool")
 def download_huggingface(limit=None):
     """Download and export HuggingFace dataset."""
     if os.path.exists(EXTRACT_DIR) and len(os.listdir(EXTRACT_DIR)) > 0:
         print(f"Data already exists in {EXTRACT_DIR}. Skipping Hugging Face download.")
         return
 
-    print(f"Loading dataset '{HF_DATASET_NAME}' from Hugging Face...")
-    dataset = load_dataset(HF_DATASET_NAME, split="train", cache_dir=HF_CACHE_DIR)
+    print(f"Loading dataset '{HF_DATASET_NAME}' from Hugging Face (streaming mode)...")
+    dataset = load_dataset(HF_DATASET_NAME, split="train", streaming=True)
     
     if limit is not None:
         print(f"Limiting to the first {limit} cases...")
-        dataset = dataset.select(range(min(limit, len(dataset))))
+        dataset = dataset.take(limit)
         
-    print(f"Dataset loaded. Processing {len(dataset)} cases.")
     print(f"Exporting to {EXTRACT_DIR}...")
     
     os.makedirs(EXTRACT_DIR, exist_ok=True)
@@ -96,6 +98,7 @@ def extract_text_from_html(file_content):
     soup = BeautifulSoup(file_content, "html.parser")
     return soup.get_text(separator="\n", strip=True)
 
+@traceable(name="embed_data_pipeline", run_type="chain")
 def embed_data(db_url, embed_provider, embed_model, embed_key, embed_host):
     """Load, chunk, and embed the extracted files."""
     if not os.path.exists(EXTRACT_DIR):
@@ -239,12 +242,13 @@ def embed_data(db_url, embed_provider, embed_model, embed_key, embed_host):
         batch_size = 200
         batches = [remaining_chunks[i:i + batch_size] for i in range(0, len(remaining_chunks), batch_size)]
         
-        print(f"Spawning 10 threads to insert {len(batches)} batches concurrently...")
+        workers = 10 if embed_provider != "ollama" else 1
+        print(f"Spawning {workers} threads to insert {len(batches)} batches concurrently...")
         
         def process_batch(batch):
             db.add_documents(batch)
             
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             list(tqdm(executor.map(process_batch, batches), total=len(batches), desc="Concurrent Embedding & Inserting"))
             
     print("Embedding complete. Your Vector Database is fully primed.")
@@ -268,16 +272,26 @@ def main():
                         help="Provider for embeddings (default: openai). Note: Anthropic/Claude does not provide native text embeddings.")
     parser.add_argument("--embed-model", default=None,
                         help="Embedding model name (defaults: openai=text-embedding-3-small, ollama=nomic-embed-text)")
-    parser.add_argument("--embed-key", default=None, help="API key for the embedding provider")
-    parser.add_argument("--embed-host", default="http://localhost:11434", help="Host URL for Ollama (default: http://localhost:11434)")
+    parser.add_argument("--embed-key", default=os.getenv("OPENAI_API_KEY"), help="API key for the embedding provider (defaults to OPENAI_API_KEY env var)")
+    parser.add_argument("--embed-host", default=os.getenv("OLLAMA_HOST", "http://localhost:11434"), help="Host URL for Ollama (default: OLLAMA_HOST or http://localhost:11434)")
                         
     # PostgreSQL Options
-    parser.add_argument("--pg-host", default="localhost", help="PostgreSQL host (default: localhost)")
-    parser.add_argument("--pg-port", default="5432", help="PostgreSQL port (default: 5432)")
-    parser.add_argument("--pg-user", default="user", help="PostgreSQL user (default: user)")
-    parser.add_argument("--pg-password", default="password", help="PostgreSQL password (default: password)")
-    parser.add_argument("--pg-db", default="judgeread", help="PostgreSQL db name (default: judgeread)")
+    parser.add_argument("--pg-host", default=os.getenv("PGHOST", "localhost"), help="PostgreSQL host")
+    parser.add_argument("--pg-port", default=os.getenv("PGPORT", "5432"), help="PostgreSQL port")
+    parser.add_argument("--pg-user", default=os.getenv("PGUSER", "user"), help="PostgreSQL user")
+    parser.add_argument("--pg-password", default=os.getenv("PGPASSWORD", "password"), help="PostgreSQL password")
+    parser.add_argument("--pg-db", default=os.getenv("PGDATABASE", "judgeread"), help="PostgreSQL db name")
+    
+    # Tracing Options
+    parser.add_argument("--langsmith-key", default=os.getenv("LANGCHAIN_API_KEY"), help="LangSmith API key for tracing telemetry")
     args = parser.parse_args()
+
+    if args.langsmith_key or os.getenv("LANGCHAIN_TRACING_V2") == "true":
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+        if args.langsmith_key:
+            os.environ["LANGCHAIN_API_KEY"] = args.langsmith_key
+        os.environ.setdefault("LANGCHAIN_PROJECT", "Judge_Read_Pipeline")
+        print("🔍 LangSmith Tracing Enabled")
 
     # Construct the fallback connection string from CLI args
     cli_db_url = f"postgresql+psycopg2://{args.pg_user}:{args.pg_password}@{args.pg_host}:{args.pg_port}/{args.pg_db}"
