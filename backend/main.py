@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
+import json
 import uvicorn
 import psycopg2
 import psycopg2.extras
@@ -45,6 +46,16 @@ class QueryResponse(BaseModel):
     sources: list
     session_id: str
 
+class ConfigModel(BaseModel):
+    embeddingModel: Optional[str] = "text-embedding-3-small"
+    embeddingKey: Optional[str] = ""
+    llmEngine: Optional[str] = "claude"
+    apiKey: Optional[str] = ""
+    langsmithKey: Optional[str] = ""
+    cohereKey: Optional[str] = ""
+
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+
 def get_db_connection():
     db_url = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/judgeread").replace("+psycopg2", "")
     return psycopg2.connect(db_url)
@@ -52,6 +63,19 @@ def get_db_connection():
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+@app.get("/api/config")
+def get_config():
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, "r") as f:
+            return json.load(f)
+    return {}
+
+@app.post("/api/config")
+def save_config(config: ConfigModel):
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(config.dict(), f, indent=4)
+    return {"status": "saved"}
 
 @app.post("/api/search", response_model=QueryResponse)
 def search_cases(req: QueryRequest):

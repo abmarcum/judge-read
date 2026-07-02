@@ -36,6 +36,39 @@ function App() {
   // Tracing
   const [langsmithKey, setLangsmithKey] = useState('');
   const [cohereKey, setCohereKey] = useState('');
+  
+  const [isConfigLoaded, setIsConfigLoaded] = useState(false);
+
+  useEffect(() => {
+    // Load initial config from backend
+    axios.get('http://localhost:8000/api/config').then((response) => {
+      const data = response.data;
+      if (data.embeddingModel) setEmbeddingModel(data.embeddingModel);
+      if (data.embeddingKey) setEmbeddingKey(data.embeddingKey);
+      if (data.llmEngine) setLlmEngine(data.llmEngine);
+      if (data.apiKey) setApiKey(data.apiKey);
+      if (data.langsmithKey) setLangsmithKey(data.langsmithKey);
+      if (data.cohereKey) setCohereKey(data.cohereKey);
+      setIsConfigLoaded(true);
+    }).catch((err) => {
+      console.error("Could not load config", err);
+      setIsConfigLoaded(true);
+    });
+  }, []);
+
+  useEffect(() => {
+    // Save config whenever it changes
+    if (isConfigLoaded) {
+      axios.post('http://localhost:8000/api/config', {
+        embeddingModel,
+        embeddingKey,
+        llmEngine,
+        apiKey,
+        langsmithKey,
+        cohereKey
+      }).catch(err => console.error("Failed to save config", err));
+    }
+  }, [embeddingModel, embeddingKey, llmEngine, apiKey, langsmithKey, cohereKey, isConfigLoaded]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
