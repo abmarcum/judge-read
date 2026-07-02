@@ -344,13 +344,47 @@ def get_full_case(case_id: str):
     return dict(case_row)
 
 @app.get("/api/cases")
-def list_cases(skip: int = 0, limit: int = 50, search: str = None):
+def list_cases(
+    skip: int = 0, 
+    limit: int = 50, 
+    search: str = None,
+    system: str = None,
+    state: str = None,
+    court: str = None,
+    status: str = None,
+    judge: str = None,
+    topic: str = None,
+    year: str = None
+):
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    
+    query = "SELECT case_id, name, reporter, court, jurisdiction, year, status FROM full_cases WHERE 1=1"
+    params = []
+    
     if search:
-        cursor.execute("SELECT case_id, name, reporter, court, jurisdiction, year, status FROM full_cases WHERE name ILIKE %s ORDER BY year DESC NULLS LAST LIMIT %s OFFSET %s", (f"%{search}%", limit, skip))
-    else:
-        cursor.execute("SELECT case_id, name, reporter, court, jurisdiction, year, status FROM full_cases ORDER BY year DESC NULLS LAST LIMIT %s OFFSET %s", (limit, skip))
+        query += " AND name ILIKE %s"
+        params.append(f"%{search}%")
+    if system == "Federal":
+        query += " AND jurisdiction = 'Federal'"
+    elif system == "State":
+        query += " AND jurisdiction != 'Federal'"
+        if state:
+            query += " AND jurisdiction = %s"
+            params.append(state)
+    if court:
+        query += " AND court = %s"
+        params.append(court)
+    if status == "good_law":
+        query += " AND status = 'good_law'"
+    if year:
+        query += " AND year = %s"
+        params.append(year)
+        
+    query += " ORDER BY year DESC NULLS LAST LIMIT %s OFFSET %s"
+    params.extend([limit, skip])
+    
+    cursor.execute(query, params)
     cases = cursor.fetchall()
     cursor.close()
     conn.close()

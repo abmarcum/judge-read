@@ -124,7 +124,14 @@ function App() {
     setIsExplorerLoading(true);
     try {
       const API_BASE = `http://${window.location.hostname}:8000`;
-      const response = await axios.get(`${API_BASE}/api/cases?search=${encodeURIComponent(searchQuery)}`);
+      let url = `${API_BASE}/api/cases?search=${encodeURIComponent(searchQuery)}`;
+      if (filterSystem) url += `&system=${encodeURIComponent(filterSystem)}`;
+      if (filterState) url += `&state=${encodeURIComponent(filterState)}`;
+      if (filterCourt) url += `&court=${encodeURIComponent(filterCourt)}`;
+      if (filterStatus) url += `&status=${encodeURIComponent(filterStatus)}`;
+      if (filterYear) url += `&year=${encodeURIComponent(filterYear)}`;
+      
+      const response = await axios.get(url);
       setExplorerCases(response.data.cases);
     } catch (error) {
       console.error("Failed to fetch cases", error);
@@ -137,7 +144,7 @@ function App() {
     if (isExplorerOpen) {
       fetchCases(explorerSearch);
     }
-  }, [isExplorerOpen, explorerSearch]);
+  }, [isExplorerOpen, explorerSearch, filterSystem, filterState, filterCourt, filterStatus, filterYear]);
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -391,6 +398,213 @@ function App() {
           <div ref={messagesEndRef} />
         </div>
 
+  const FilterControls = () => (
+    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', width: '100%' }}>
+      <select 
+        className="input-glass" 
+        value={filterSystem} 
+        onChange={(e) => {
+          setFilterSystem(e.target.value);
+          if (e.target.value !== 'State') setFilterState('');
+        }}
+        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '130px' }}
+      >
+        <option value="">Any System</option>
+        <option value="Federal">Federal Only</option>
+        <option value="State">State Only</option>
+      </select>
+
+      {filterSystem === 'State' && (
+        <select 
+          className="input-glass animate-fade-in" 
+          value={filterState} 
+          onChange={(e) => setFilterState(e.target.value)}
+          style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '150px' }}
+        >
+          <option value="">All States</option>
+          {["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming"].map(state => (
+            <option key={state} value={state}>{state}</option>
+          ))}
+        </select>
+      )}
+
+      <select 
+        className="input-glass" 
+        value={filterCourt} 
+        onChange={(e) => setFilterCourt(e.target.value)}
+        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '140px' }}
+      >
+        <option value="">Any Court Level</option>
+        {(filterSystem === '' || filterSystem === 'Federal') && (
+          <optgroup label="Federal Courts">
+            <option value="US Supreme Court">US Supreme Court</option>
+            <option value="US Court of Appeals (1st Circuit)">US Court of Appeals (1st Circuit)</option>
+            <option value="US Court of Appeals (2nd Circuit)">US Court of Appeals (2nd Circuit)</option>
+            <option value="US Court of Appeals (3rd Circuit)">US Court of Appeals (3rd Circuit)</option>
+            <option value="US Court of Appeals (4th Circuit)">US Court of Appeals (4th Circuit)</option>
+            <option value="US Court of Appeals (5th Circuit)">US Court of Appeals (5th Circuit)</option>
+            <option value="US Court of Appeals (6th Circuit)">US Court of Appeals (6th Circuit)</option>
+            <option value="US Court of Appeals (7th Circuit)">US Court of Appeals (7th Circuit)</option>
+            <option value="US Court of Appeals (8th Circuit)">US Court of Appeals (8th Circuit)</option>
+            <option value="US Court of Appeals (9th Circuit)">US Court of Appeals (9th Circuit)</option>
+            <option value="US Court of Appeals (10th Circuit)">US Court of Appeals (10th Circuit)</option>
+            <option value="US Court of Appeals (11th Circuit)">US Court of Appeals (11th Circuit)</option>
+            <option value="US Court of Appeals (DC Circuit)">US Court of Appeals (DC Circuit)</option>
+            <option value="US Court of Appeals (Federal Circuit)">US Court of Appeals (Federal Circuit)</option>
+            <option value="US District Court">US District Court</option>
+            <option value="US Bankruptcy Court">US Bankruptcy Court</option>
+            <option value="US Tax Court">US Tax Court</option>
+            <option value="US Court of Federal Claims">US Court of Federal Claims</option>
+            <option value="US Court of International Trade">US Court of International Trade</option>
+            <option value="US Court of Appeals for Veterans Claims">US Court of Appeals for Veterans Claims</option>
+            <option value="US Court of Appeals for the Armed Forces">US Court of Appeals for the Armed Forces</option>
+          </optgroup>
+        )}
+        {(filterSystem === '' || filterSystem === 'State') && (
+          <optgroup label="State Courts">
+            <option value="State Supreme Court">State Supreme Court</option>
+            <option value="State Court of Appeals">State Court of Appeals</option>
+            <option value="Superior Court">Superior Court</option>
+            <option value="Circuit Court">Circuit Court</option>
+            <option value="District Court">District Court</option>
+            <option value="Municipal Court">Municipal Court</option>
+            <option value="Justice Court">Justice Court</option>
+            <option value="Magistrate Court">Magistrate Court</option>
+            <option value="Family Court">Family Court</option>
+            <option value="Probate Court">Probate Court</option>
+            <option value="Juvenile Court">Juvenile Court</option>
+            <option value="Small Claims Court">Small Claims Court</option>
+            <option value="Traffic Court">Traffic Court</option>
+            <option value="Workers' Compensation Court">Workers' Compensation Court</option>
+          </optgroup>
+        )}
+      </select>
+
+      <select 
+        className="input-glass" 
+        value={filterTopic} 
+        onChange={(e) => setFilterTopic(e.target.value)}
+        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '140px' }}
+      >
+        <option value="">Any Topic</option>
+        <option value="Criminal">Criminal</option>
+        <option value="Civil">Civil</option>
+        <option value="Tax">Tax</option>
+        <option value="Intellectual Property">Intellectual Property</option>
+        <option value="Constitutional">Constitutional</option>
+      </select>
+
+      <input 
+        type="text"
+        className="input-glass" 
+        placeholder="Judge (e.g. Sotomayor)"
+        value={filterJudge} 
+        onChange={(e) => setFilterJudge(e.target.value)} 
+        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '150px' }}
+      />
+
+      <input 
+        type="number"
+        className="input-glass" 
+        placeholder="Year (e.g. 2015)"
+        value={filterYear} 
+        onChange={(e) => setFilterYear(e.target.value)} 
+        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '120px' }}
+      />
+
+      <select 
+        className="input-glass" 
+        value={filterStatus} 
+        onChange={(e) => setFilterStatus(e.target.value)}
+        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', color: filterStatus === 'good_law' ? '#51cf66' : 'inherit', flex: 1, minWidth: '150px' }}
+      >
+        <option value="">All Precedent</option>
+        <option value="good_law">Good Law Only</option>
+      </select>
+    </div>
+  );
+
+  return (
+    <div className="app-container" style={{ position: 'relative' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', maxWidth: '1200px', margin: '0 auto', width: '100%' }}>
+        {/* Header */}
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '24px 32px', borderBottom: '1px solid var(--border-color)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div style={{ background: 'var(--accent)', padding: '10px', borderRadius: '12px', display: 'flex', boxShadow: '0 4px 15px var(--accent-glow)' }}>
+              <Scale size={24} color="white" />
+            </div>
+            <h1 style={{ fontSize: '1.5rem', fontWeight: 600, letterSpacing: '-0.5px' }}>Judge Read</h1>
+          </div>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button className="button-icon" onClick={() => setIsExplorerOpen(true)} title="Case Explorer">
+              <BookOpen size={24} />
+            </button>
+            <button className="button-icon" onClick={() => setIsSettingsOpen(true)}>
+              <Settings size={24} />
+            </button>
+          </div>
+        </header>
+
+        {/* Chat History */}
+        <div className="scroll-smooth" style={{ flex: 1, overflowY: 'auto', padding: '32px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          {messages.map((msg, idx) => (
+            <div key={idx} className={`animate-fade-in ${msg.role === 'user' ? 'user-msg' : 'assistant-msg'}`} style={{
+              alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+              maxWidth: '80%', display: 'flex', flexDirection: 'column', gap: '8px'
+            }}>
+              <div style={{ 
+                padding: '16px 20px', 
+                borderRadius: '16px',
+                background: msg.role === 'user' ? 'var(--accent)' : 'var(--panel-bg)',
+                border: msg.role === 'user' ? 'none' : '1px solid var(--border-color)',
+                color: msg.role === 'user' ? 'white' : 'var(--text-main)',
+                boxShadow: msg.role === 'user' ? '0 4px 15px var(--accent-glow)' : '0 4px 15px rgba(0,0,0,0.2)',
+                borderBottomRightRadius: msg.role === 'user' ? '4px' : '16px',
+                borderTopLeftRadius: msg.role === 'assistant' ? '4px' : '16px',
+                lineHeight: '1.6',
+                overflowWrap: 'anywhere'
+              }} className="markdown-body">
+                <ReactMarkdown>{msg.content}</ReactMarkdown>
+              </div>
+              
+              {/* Sources render if assistant and has sources */}
+              {msg.sources && msg.sources.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '4px' }}>
+                  {msg.sources.map((src, i) => (
+                    <div 
+                      key={i} 
+                      onClick={() => fetchFullCase(src.case_id)}
+                      style={{ 
+                        fontSize: '0.8rem', padding: '6px 12px', background: 'rgba(255,255,255,0.05)', 
+                        borderRadius: '20px', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '4px',
+                        color: 'var(--text-muted)', cursor: src.case_id ? 'pointer' : 'default',
+                        transition: 'all 0.2s ease'
+                      }}
+                      className={src.case_id ? 'hover-pill' : ''}
+                    >
+                      <ChevronRight size={14} /> {src.name} ({src.reporter})
+                      {src.overruled && (
+                        <span style={{ 
+                          background: 'rgba(255, 50, 50, 0.2)', color: '#ff6b6b', 
+                          padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', marginLeft: '4px' 
+                        }}>
+                          OVERRULED
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+          {isLoading && (
+            <div className="animate-fade-in" style={{ alignSelf: 'flex-start', padding: '16px 20px', borderRadius: '16px', background: 'var(--panel-bg)', border: '1px solid var(--border-color)' }}>
+              <Loader2 className="spinner" size={20} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent)' }} />
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
         {/* Input Area */}
         <div style={{ padding: '24px 32px', background: 'linear-gradient(to top, rgba(11,15,25,1) 50%, rgba(11,15,25,0))' }}>
           
@@ -404,129 +618,7 @@ function App() {
               Search Filters
             </div>
             
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', width: '100%' }}>
-              <select 
-                className="input-glass" 
-                value={filterSystem} 
-                onChange={(e) => {
-                  setFilterSystem(e.target.value);
-                  if (e.target.value !== 'State') setFilterState('');
-                }}
-                style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '130px' }}
-              >
-                <option value="">Any System</option>
-                <option value="Federal">Federal Only</option>
-                <option value="State">State Only</option>
-              </select>
-
-              {filterSystem === 'State' && (
-                <select 
-                  className="input-glass animate-fade-in" 
-                  value={filterState} 
-                  onChange={(e) => setFilterState(e.target.value)}
-                  style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '150px' }}
-                >
-                  <option value="">All States</option>
-                  {["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming"].map(state => (
-                    <option key={state} value={state}>{state}</option>
-                  ))}
-                </select>
-              )}
-
-              <select 
-                className="input-glass" 
-                value={filterCourt} 
-                onChange={(e) => setFilterCourt(e.target.value)}
-                style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '140px' }}
-              >
-                <option value="">Any Court Level</option>
-                {(filterSystem === '' || filterSystem === 'Federal') && (
-                  <optgroup label="Federal Courts">
-                    <option value="US Supreme Court">US Supreme Court</option>
-                    <option value="US Court of Appeals (1st Circuit)">US Court of Appeals (1st Circuit)</option>
-                    <option value="US Court of Appeals (2nd Circuit)">US Court of Appeals (2nd Circuit)</option>
-                    <option value="US Court of Appeals (3rd Circuit)">US Court of Appeals (3rd Circuit)</option>
-                    <option value="US Court of Appeals (4th Circuit)">US Court of Appeals (4th Circuit)</option>
-                    <option value="US Court of Appeals (5th Circuit)">US Court of Appeals (5th Circuit)</option>
-                    <option value="US Court of Appeals (6th Circuit)">US Court of Appeals (6th Circuit)</option>
-                    <option value="US Court of Appeals (7th Circuit)">US Court of Appeals (7th Circuit)</option>
-                    <option value="US Court of Appeals (8th Circuit)">US Court of Appeals (8th Circuit)</option>
-                    <option value="US Court of Appeals (9th Circuit)">US Court of Appeals (9th Circuit)</option>
-                    <option value="US Court of Appeals (10th Circuit)">US Court of Appeals (10th Circuit)</option>
-                    <option value="US Court of Appeals (11th Circuit)">US Court of Appeals (11th Circuit)</option>
-                    <option value="US Court of Appeals (DC Circuit)">US Court of Appeals (DC Circuit)</option>
-                    <option value="US Court of Appeals (Federal Circuit)">US Court of Appeals (Federal Circuit)</option>
-                    <option value="US District Court">US District Court</option>
-                    <option value="US Bankruptcy Court">US Bankruptcy Court</option>
-                    <option value="US Tax Court">US Tax Court</option>
-                    <option value="US Court of Federal Claims">US Court of Federal Claims</option>
-                    <option value="US Court of International Trade">US Court of International Trade</option>
-                    <option value="US Court of Appeals for Veterans Claims">US Court of Appeals for Veterans Claims</option>
-                    <option value="US Court of Appeals for the Armed Forces">US Court of Appeals for the Armed Forces</option>
-                  </optgroup>
-                )}
-                {(filterSystem === '' || filterSystem === 'State') && (
-                  <optgroup label="State Courts">
-                    <option value="State Supreme Court">State Supreme Court</option>
-                    <option value="State Court of Appeals">State Court of Appeals</option>
-                    <option value="Superior Court">Superior Court</option>
-                    <option value="Circuit Court">Circuit Court</option>
-                    <option value="District Court">District Court</option>
-                    <option value="Municipal Court">Municipal Court</option>
-                    <option value="Justice Court">Justice Court</option>
-                    <option value="Magistrate Court">Magistrate Court</option>
-                    <option value="Family Court">Family Court</option>
-                    <option value="Probate Court">Probate Court</option>
-                    <option value="Juvenile Court">Juvenile Court</option>
-                    <option value="Small Claims Court">Small Claims Court</option>
-                    <option value="Traffic Court">Traffic Court</option>
-                    <option value="Workers' Compensation Court">Workers' Compensation Court</option>
-                  </optgroup>
-                )}
-              </select>
-
-              <select 
-                className="input-glass" 
-                value={filterTopic} 
-                onChange={(e) => setFilterTopic(e.target.value)}
-                style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '140px' }}
-              >
-                <option value="">Any Topic</option>
-                <option value="Criminal">Criminal</option>
-                <option value="Civil">Civil</option>
-                <option value="Tax">Tax</option>
-                <option value="Intellectual Property">Intellectual Property</option>
-                <option value="Constitutional">Constitutional</option>
-              </select>
-
-              <input 
-                type="text"
-                className="input-glass" 
-                placeholder="Judge (e.g. Sotomayor)"
-                value={filterJudge} 
-                onChange={(e) => setFilterJudge(e.target.value)} 
-                style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '150px' }}
-              />
-
-              <input 
-                type="number"
-                className="input-glass" 
-                placeholder="Year (e.g. 2015)"
-                value={filterYear} 
-                onChange={(e) => setFilterYear(e.target.value)} 
-                style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '120px' }}
-              />
-
-              <select 
-                className="input-glass" 
-                value={filterStatus} 
-                onChange={(e) => setFilterStatus(e.target.value)}
-                style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', color: filterStatus === 'good_law' ? '#51cf66' : 'inherit', flex: 1, minWidth: '150px' }}
-              >
-                <option value="">All Precedent</option>
-                <option value="good_law">Good Law Only</option>
-              </select>
-            </div>
+            <FilterControls />
           </div>
 
           <form onSubmit={handleSearch} className="glass-panel" style={{ 
@@ -580,7 +672,7 @@ function App() {
               </button>
             </div>
             
-            <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '12px' }}>
+            <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div style={{ flex: 1, position: 'relative' }}>
                 <Search size={18} color="var(--text-muted)" style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)' }} />
                 <input 
@@ -592,6 +684,7 @@ function App() {
                   style={{ width: '100%', padding: '10px 16px 10px 44px', borderRadius: '8px' }}
                 />
               </div>
+              <FilterControls />
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '0' }}>
