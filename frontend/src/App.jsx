@@ -41,7 +41,8 @@ function App() {
 
   useEffect(() => {
     // Load initial config from backend
-    axios.get('http://localhost:8000/api/config').then((response) => {
+    const API_BASE = `http://${window.location.hostname}:8000`;
+    axios.get(`${API_BASE}/api/config`).then((response) => {
       const data = response.data;
       if (data.embeddingModel) setEmbeddingModel(data.embeddingModel);
       if (data.embeddingKey) setEmbeddingKey(data.embeddingKey);
@@ -59,7 +60,8 @@ function App() {
   useEffect(() => {
     // Save config whenever it changes
     if (isConfigLoaded) {
-      axios.post('http://localhost:8000/api/config', {
+      const API_BASE = `http://${window.location.hostname}:8000`;
+      axios.post(`${API_BASE}/api/config`, {
         embeddingModel,
         embeddingKey,
         llmEngine,
@@ -83,7 +85,8 @@ function App() {
     setIsCaseLoading(true);
     setSelectedCase(null);
     try {
-      const response = await axios.get(`http://localhost:8000/api/cases/${caseId}`);
+      const API_BASE = `http://${window.location.hostname}:8000`;
+      const response = await axios.get(`${API_BASE}/api/cases/${caseId}`);
       setSelectedCase(response.data);
     } catch (error) {
       console.error("Failed to fetch full case", error);
@@ -103,7 +106,8 @@ function App() {
     setIsLoading(true);
 
     try {
-      const response = await axios.post('http://localhost:8000/api/search', {
+      const API_BASE = `http://${window.location.hostname}:8000`;
+      const response = await axios.post(`${API_BASE}/api/search`, {
         query: userMessage.content,
         session_id: sessionId,
         embedding_model: embeddingModel,

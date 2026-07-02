@@ -6,7 +6,7 @@ import json
 from tqdm import tqdm
 from datasets import load_dataset
 from bs4 import BeautifulSoup
-from langchain_community.document_loaders import DirectoryLoader
+from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import PGVector
@@ -87,7 +87,7 @@ def download_huggingface(limit=None):
         file_path = os.path.join(EXTRACT_DIR, f"{case_id}.json")
         
         with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(case, f, ensure_ascii=False)
+            json.dump(case, f, ensure_ascii=False, default=str)
 
     print("Export complete. Your repository is ready for processing.")
 
@@ -107,7 +107,7 @@ def embed_data(db_url, embed_provider, embed_model, embed_key, embed_host):
     subprocess.run(["python", "db_setup.py"], env=dict(os.environ, DATABASE_URL=db_url))
 
     print("Loading raw documents from repository...")
-    loader = DirectoryLoader(EXTRACT_DIR, glob="**/*.*")
+    loader = DirectoryLoader(EXTRACT_DIR, glob="**/*.*", loader_cls=TextLoader)
     raw_documents = loader.load()
 
     if not raw_documents:
@@ -220,13 +220,18 @@ def embed_data(db_url, embed_provider, embed_model, embed_key, embed_host):
     
     import concurrent.futures
     
+    # Disable automatic extension creation to prevent privilege errors (since db_setup.py handles this)
+    if hasattr(PGVector, 'create_vector_extension'):
+        PGVector.create_vector_extension = lambda self: None
+
     # Initialize the table and delete old collection using just the first chunk
     db = PGVector.from_documents(
         embedding=embeddings,
         documents=chunks[:1],
         collection_name=COLLECTION_NAME,
         connection_string=CONNECTION_STRING,
-        pre_delete_collection=True
+        pre_delete_collection=True,
+        use_jsonb=True
     )
     
     remaining_chunks = chunks[1:]

@@ -17,7 +17,11 @@ def setup_db():
         return
 
     print("Setting up pgvector extension...")
-    cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+    try:
+        cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+    except psycopg2.Error as e:
+        print(f"Warning: Could not create pgvector extension: {e}")
+        print("If it's not already installed, please ask a database superuser to run: CREATE EXTENSION vector;")
 
     print("Creating sessions table...")
     cursor.execute("""
