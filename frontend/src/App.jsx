@@ -184,15 +184,138 @@ function App() {
         sources: response.data.sources
       }]);
     } catch (error) {
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: 'I encountered an error connecting to the retrieval system. Please check your backend.',
-        error: true
-      }]);
+      console.error("Query failed", error);
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, I encountered an error. Is the backend running?' }]);
     } finally {
       setIsLoading(false);
     }
   };
+
+  const FilterControls = () => (
+    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', width: '100%' }}>
+      <select 
+        className="input-glass" 
+        value={filterSystem} 
+        onChange={(e) => {
+          setFilterSystem(e.target.value);
+          if (e.target.value !== 'State') setFilterState('');
+        }}
+        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '130px' }}
+      >
+        <option value="">Any System</option>
+        <option value="Federal">Federal Only</option>
+        <option value="State">State Only</option>
+      </select>
+
+      {filterSystem === 'State' && (
+        <select 
+          className="input-glass animate-fade-in" 
+          value={filterState} 
+          onChange={(e) => setFilterState(e.target.value)}
+          style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '150px' }}
+        >
+          <option value="">All States</option>
+          {["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming"].map(state => (
+            <option key={state} value={state}>{state}</option>
+          ))}
+        </select>
+      )}
+
+      <select 
+        className="input-glass" 
+        value={filterCourt} 
+        onChange={(e) => setFilterCourt(e.target.value)}
+        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '140px' }}
+      >
+        <option value="">Any Court Level</option>
+        {(filterSystem === '' || filterSystem === 'Federal') && (
+          <optgroup label="Federal Courts">
+            <option value="US Supreme Court">US Supreme Court</option>
+            <option value="US Court of Appeals (1st Circuit)">US Court of Appeals (1st Circuit)</option>
+            <option value="US Court of Appeals (2nd Circuit)">US Court of Appeals (2nd Circuit)</option>
+            <option value="US Court of Appeals (3rd Circuit)">US Court of Appeals (3rd Circuit)</option>
+            <option value="US Court of Appeals (4th Circuit)">US Court of Appeals (4th Circuit)</option>
+            <option value="US Court of Appeals (5th Circuit)">US Court of Appeals (5th Circuit)</option>
+            <option value="US Court of Appeals (6th Circuit)">US Court of Appeals (6th Circuit)</option>
+            <option value="US Court of Appeals (7th Circuit)">US Court of Appeals (7th Circuit)</option>
+            <option value="US Court of Appeals (8th Circuit)">US Court of Appeals (8th Circuit)</option>
+            <option value="US Court of Appeals (9th Circuit)">US Court of Appeals (9th Circuit)</option>
+            <option value="US Court of Appeals (10th Circuit)">US Court of Appeals (10th Circuit)</option>
+            <option value="US Court of Appeals (11th Circuit)">US Court of Appeals (11th Circuit)</option>
+            <option value="US Court of Appeals (DC Circuit)">US Court of Appeals (DC Circuit)</option>
+            <option value="US Court of Appeals (Federal Circuit)">US Court of Appeals (Federal Circuit)</option>
+            <option value="US District Court">US District Court</option>
+            <option value="US Bankruptcy Court">US Bankruptcy Court</option>
+            <option value="US Tax Court">US Tax Court</option>
+            <option value="US Court of Federal Claims">US Court of Federal Claims</option>
+            <option value="US Court of International Trade">US Court of International Trade</option>
+            <option value="US Court of Appeals for Veterans Claims">US Court of Appeals for Veterans Claims</option>
+            <option value="US Court of Appeals for the Armed Forces">US Court of Appeals for the Armed Forces</option>
+          </optgroup>
+        )}
+        {(filterSystem === '' || filterSystem === 'State') && (
+          <optgroup label="State Courts">
+            <option value="State Supreme Court">State Supreme Court</option>
+            <option value="State Court of Appeals">State Court of Appeals</option>
+            <option value="Superior Court">Superior Court</option>
+            <option value="Circuit Court">Circuit Court</option>
+            <option value="District Court">District Court</option>
+            <option value="Municipal Court">Municipal Court</option>
+            <option value="Justice Court">Justice Court</option>
+            <option value="Magistrate Court">Magistrate Court</option>
+            <option value="Family Court">Family Court</option>
+            <option value="Probate Court">Probate Court</option>
+            <option value="Juvenile Court">Juvenile Court</option>
+            <option value="Small Claims Court">Small Claims Court</option>
+            <option value="Traffic Court">Traffic Court</option>
+            <option value="Workers' Compensation Court">Workers' Compensation Court</option>
+          </optgroup>
+        )}
+      </select>
+
+      <select 
+        className="input-glass" 
+        value={filterTopic} 
+        onChange={(e) => setFilterTopic(e.target.value)}
+        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '140px' }}
+      >
+        <option value="">Any Topic</option>
+        <option value="Criminal">Criminal</option>
+        <option value="Civil">Civil</option>
+        <option value="Tax">Tax</option>
+        <option value="Intellectual Property">Intellectual Property</option>
+        <option value="Constitutional">Constitutional</option>
+      </select>
+
+      <input 
+        type="text"
+        className="input-glass" 
+        placeholder="Judge (e.g. Sotomayor)"
+        value={filterJudge} 
+        onChange={(e) => setFilterJudge(e.target.value)} 
+        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '150px' }}
+      />
+
+      <input 
+        type="number"
+        className="input-glass" 
+        placeholder="Year (e.g. 2015)"
+        value={filterYear} 
+        onChange={(e) => setFilterYear(e.target.value)} 
+        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '120px' }}
+      />
+
+      <select 
+        className="input-glass" 
+        value={filterStatus} 
+        onChange={(e) => setFilterStatus(e.target.value)}
+        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', color: filterStatus === 'good_law' ? '#51cf66' : 'inherit', flex: 1, minWidth: '150px' }}
+      >
+        <option value="">All Precedent</option>
+        <option value="good_law">Good Law Only</option>
+      </select>
+    </div>
+  );
 
   return (
     <div className="app-container" style={{ display: 'flex', height: '100vh' }}>
@@ -397,8 +520,6 @@ function App() {
           )}
           <div ref={messagesEndRef} />
         </div>
-
-  const FilterControls = () => (
     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', width: '100%' }}>
       <select 
         className="input-glass" 
