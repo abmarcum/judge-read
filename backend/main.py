@@ -240,7 +240,7 @@ def _run_search_pipeline(req: QueryRequest):
             e.cmetadata, 
             e.embedding <=> {vector_query} AS vector_distance,
             ts_rank_cd(e.tsvector_doc, plainto_tsquery('english', %s)) AS fts_rank,
-            substring(f.full_text from '"case_name_full":\s*"([^"]+)"') AS case_name_full
+            substring(f.full_text from '"case_name_full":\\s*"([^"]+)"') AS case_name_full
         FROM langchain_pg_embedding e
         LEFT JOIN full_cases f ON (e.cmetadata->>'case_id') = f.case_id
         WHERE 1=1 {filter_sql.replace('cmetadata', 'e.cmetadata')}
@@ -361,7 +361,7 @@ def list_cases(
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     
-    query = "SELECT case_id, COALESCE(substring(full_text from '\"case_name_full\":\s*\"([^\"]+)\"'), name) as name, reporter, court, jurisdiction, year, status FROM full_cases WHERE 1=1"
+    query = "SELECT case_id, COALESCE(substring(full_text from '\"case_name_full\":\\s*\"([^\"]+)\"'), name) as name, reporter, court, jurisdiction, year, status FROM full_cases WHERE 1=1"
     params = []
     
     if search:
