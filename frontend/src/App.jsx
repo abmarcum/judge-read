@@ -660,54 +660,56 @@ function App() {
           zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center',
           padding: '40px'
         }}>
-          <div className="glass-panel animate-fade-in" style={{
-            width: '100%', maxWidth: '900px', maxHeight: '100%', display: 'flex', flexDirection: 'column',
-            background: 'var(--panel-bg)', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 20px 40px rgba(0,0,0,0.5)'
-          }}>
-            <div style={{ padding: '24px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <h2 style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-main)' }}>
-                  {selectedCase ? selectedCase.name : 'Loading Document...'}
-                </h2>
-                {selectedCase && (
-                  <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                    {selectedCase.reporter} • {selectedCase.court} • {selectedCase.year}
-                  </div>
-                )}
-              </div>
-              <button className="button-icon" onClick={() => setSelectedCase(null) || setIsCaseLoading(false)}>
-                <X size={24} />
-              </button>
-            </div>
-            
-            <div style={{ flex: 1, overflowY: 'auto', padding: '32px', fontSize: '1rem', lineHeight: '1.8', color: 'var(--text-main)' }}>
-              {isCaseLoading ? (
-                <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
-                  <Loader2 className="spinner" size={32} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent)' }} />
-                </div>
-              ) : (
-                <div className="markdown-body" style={{ overflowWrap: 'anywhere' }}>
-                  {(() => {
-                    let parsed = null;
-                    try {
-                      let rawText = selectedCase.full_text;
-                      // Clean up unescaped control characters from postgres json dumps
-                      rawText = rawText.replace(/[\u0000-\u001F]+/g, (match) => {
-                        return match.split('').map(char => {
-                          if (char === '\n') return '\\n';
-                          if (char === '\r') return '\\r';
-                          if (char === '\t') return '\\t';
-                          if (char === '\f') return '\\f';
-                          return '';
-                        }).join('');
-                      });
-                      parsed = JSON.parse(rawText);
-                    } catch (e) {
-                      // Fallback if not JSON
-                    }
+          {(() => {
+            let parsed = null;
+            if (selectedCase && selectedCase.full_text) {
+              try {
+                let rawText = selectedCase.full_text;
+                // Clean up unescaped control characters from postgres json dumps
+                rawText = rawText.replace(/[\u0000-\u001F]+/g, (match) => {
+                  return match.split('').map(char => {
+                    if (char === '\n') return '\\n';
+                    if (char === '\r') return '\\r';
+                    if (char === '\t') return '\\t';
+                    if (char === '\f') return '\\f';
+                    return '';
+                  }).join('');
+                });
+                parsed = JSON.parse(rawText);
+              } catch (e) {
+                // Fallback if not JSON
+              }
+            }
 
-                    if (parsed) {
-                      return (
+            return (
+              <div className="glass-panel animate-fade-in" style={{
+                width: '100%', maxWidth: '900px', maxHeight: '100%', display: 'flex', flexDirection: 'column',
+                background: 'var(--panel-bg)', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 20px 40px rgba(0,0,0,0.5)'
+              }}>
+                <div style={{ padding: '24px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <h2 style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-main)' }}>
+                      {isCaseLoading ? 'Loading Document...' : (parsed && parsed.case_name_full ? parsed.case_name_full : selectedCase.name)}
+                    </h2>
+                    {selectedCase && (
+                      <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        {selectedCase.reporter} • {selectedCase.court} • {selectedCase.year}
+                      </div>
+                    )}
+                  </div>
+                  <button className="button-icon" onClick={() => setSelectedCase(null) || setIsCaseLoading(false)}>
+                    <X size={24} />
+                  </button>
+                </div>
+                
+                <div style={{ flex: 1, overflowY: 'auto', padding: '32px', fontSize: '1rem', lineHeight: '1.8', color: 'var(--text-main)' }}>
+                  {isCaseLoading ? (
+                    <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+                      <Loader2 className="spinner" size={32} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent)' }} />
+                    </div>
+                  ) : (
+                    <div className="markdown-body" style={{ overflowWrap: 'anywhere' }}>
+                      {parsed ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                           <div style={{ background: 'rgba(255,255,255,0.02)', padding: '24px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
                             <h3 style={{ marginTop: 0, color: 'var(--accent)', fontSize: '1.1rem' }}>Metadata</h3>
@@ -755,6 +757,25 @@ function App() {
                               {parsed.opinions.map((o, idx) => (
                                 <div key={idx} style={{ marginTop: '16px' }}>
                                   {o.author_str && <h4 style={{ color: 'var(--text-muted)' }}>Author: {o.author_str}</h4>}
+                                  
+                                  {o.download_url && (
+                                    <div style={{ marginBottom: '16px' }}>
+                                      <a 
+                                        href={o.download_url} 
+                                        target="_blank" 
+                                        rel="noreferrer" 
+                                        style={{ 
+                                          display: 'inline-flex', alignItems: 'center', gap: '8px', 
+                                          color: 'var(--bg-main)', background: 'var(--accent)', 
+                                          textDecoration: 'none', fontWeight: 600, padding: '8px 16px', 
+                                          borderRadius: '8px', fontSize: '0.9rem' 
+                                        }}
+                                      >
+                                        Download PDF
+                                      </a>
+                                    </div>
+                                  )}
+                                  
                                   <ReactMarkdown>{o.opinion_text}</ReactMarkdown>
                                   {idx < parsed.opinions.length - 1 && <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '32px 0' }}/>}
                                 </div>
@@ -762,15 +783,15 @@ function App() {
                             </div>
                           ) : null}
                         </div>
-                      );
-                    }
-
-                    return <ReactMarkdown>{selectedCase.full_text}</ReactMarkdown>;
-                  })()}
+                      ) : (
+                        <ReactMarkdown>{selectedCase.full_text}</ReactMarkdown>
+                      )}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
