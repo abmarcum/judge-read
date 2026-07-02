@@ -36,6 +36,13 @@ function App() {
   // Tracing
   const [langsmithKey, setLangsmithKey] = useState('');
   const [cohereKey, setCohereKey] = useState('');
+
+  // Postgres Settings
+  const [pgHost, setPgHost] = useState('localhost');
+  const [pgPort, setPgPort] = useState('5432');
+  const [pgUser, setPgUser] = useState('user');
+  const [pgPassword, setPgPassword] = useState('password');
+  const [pgDb, setPgDb] = useState('judgeread');
   
   const [isConfigLoaded, setIsConfigLoaded] = useState(false);
 
@@ -46,8 +53,8 @@ function App() {
   const [isExplorerLoading, setIsExplorerLoading] = useState(false);
 
   useEffect(() => {
-    // Load initial config from backend
-    axios.get('http://localhost:8000/api/config').then((response) => {
+    // Load config on mount
+    axios.get(`http://${window.location.hostname}:8000/api/config`).then((response) => {
       const data = response.data;
       if (data.embeddingModel) setEmbeddingModel(data.embeddingModel);
       if (data.embeddingKey) setEmbeddingKey(data.embeddingKey);
@@ -55,6 +62,11 @@ function App() {
       if (data.apiKey) setApiKey(data.apiKey);
       if (data.langsmithKey) setLangsmithKey(data.langsmithKey);
       if (data.cohereKey) setCohereKey(data.cohereKey);
+      if (data.pgHost) setPgHost(data.pgHost);
+      if (data.pgPort) setPgPort(data.pgPort);
+      if (data.pgUser) setPgUser(data.pgUser);
+      if (data.pgPassword) setPgPassword(data.pgPassword);
+      if (data.pgDb) setPgDb(data.pgDb);
       setIsConfigLoaded(true);
     }).catch((err) => {
       console.error("Could not load config", err);
@@ -62,19 +74,24 @@ function App() {
     });
   }, []);
 
+  // Save config whenever it changes
   useEffect(() => {
-    // Save config whenever it changes
     if (isConfigLoaded) {
-      axios.post('http://localhost:8000/api/config', {
+      axios.post(`http://${window.location.hostname}:8000/api/config`, {
         embeddingModel,
         embeddingKey,
         llmEngine,
         apiKey,
         langsmithKey,
-        cohereKey
+        cohereKey,
+        pgHost,
+        pgPort,
+        pgUser,
+        pgPassword,
+        pgDb
       }).catch(err => console.error("Failed to save config", err));
     }
-  }, [embeddingModel, embeddingKey, llmEngine, apiKey, langsmithKey, cohereKey, isConfigLoaded]);
+  }, [embeddingModel, embeddingKey, llmEngine, apiKey, langsmithKey, cohereKey, pgHost, pgPort, pgUser, pgPassword, pgDb, isConfigLoaded]);
 
   const fetchCases = async () => {
     setIsExplorerLoading(true);
@@ -87,7 +104,7 @@ function App() {
       if (filterSystem === 'State') params.append('system', filterState || 'State');
       if (filterStatus) params.append('status', filterStatus);
 
-      const response = await axios.get(`http://localhost:8000/api/cases?${params.toString()}`);
+      const response = await axios.get(`http://${window.location.hostname}:8000/api/cases?${params.toString()}`);
       setExplorerCases(response.data.cases || []);
     } catch (err) {
       console.error("Failed to fetch cases:", err);
@@ -115,7 +132,7 @@ function App() {
     setIsCaseLoading(true);
     setSelectedCase(null);
     try {
-      const response = await axios.get(`http://localhost:8000/api/cases/${caseId}`);
+      const response = await axios.get(`http://${window.location.hostname}:8000/api/cases/${caseId}`);
       setSelectedCase(response.data);
     } catch (error) {
       console.error("Failed to fetch full case", error);
@@ -135,7 +152,7 @@ function App() {
     setIsLoading(true);
 
     try {
-      const response = await axios.post('http://localhost:8000/api/search', {
+      const response = await axios.post(`http://${window.location.hostname}:8000/api/search`, {
         query: userMessage.content,
         session_id: sessionId,
         embedding_model: embeddingModel,
@@ -361,6 +378,34 @@ function App() {
               value={apiKey} 
               onChange={(e) => setApiKey(e.target.value)} 
             />
+          </div>
+
+          <div style={{ marginTop: '16px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: 500, marginBottom: '12px' }}>PostgreSQL Configuration</h3>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Host</label>
+                <input type="text" className="input-glass" value={pgHost} onChange={(e) => setPgHost(e.target.value)} />
+              </div>
+              <div style={{ width: '80px' }}>
+                <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Port</label>
+                <input type="text" className="input-glass" value={pgPort} onChange={(e) => setPgPort(e.target.value)} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>User</label>
+                <input type="text" className="input-glass" value={pgUser} onChange={(e) => setPgUser(e.target.value)} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Password</label>
+                <input type="password" className="input-glass" value={pgPassword} onChange={(e) => setPgPassword(e.target.value)} />
+              </div>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Database Name</label>
+              <input type="text" className="input-glass" value={pgDb} onChange={(e) => setPgDb(e.target.value)} />
+            </div>
           </div>
 
           <div style={{ marginTop: '16px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
