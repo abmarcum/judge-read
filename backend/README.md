@@ -43,6 +43,37 @@ To run the REST API:
 ```bash
 uv run uvicorn main:app --reload
 ```
+*(Note: By default, Uvicorn binds to `127.0.0.1`. If you want to access the API from another device on your local network, add `--host 0.0.0.0` to the command above.)*
+
+## Setting up PostgreSQL with pgvector (Linux)
+
+Judge Read requires the `pgvector` extension to run vector similarity searches.
+
+### Option 1: Docker (Recommended)
+The easiest way to run PostgreSQL with `pgvector` on Linux is using the official Docker image:
+```bash
+docker run -d --name judgeread-db \
+  -e POSTGRES_USER=user \
+  -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=judgeread \
+  -p 5432:5432 \
+  pgvector/pgvector:pg16
+```
+
+### Option 2: Native Installation (Ubuntu/Debian)
+If you prefer to install it directly on your Linux host:
+```bash
+# Install PostgreSQL and pgvector
+sudo apt update
+sudo apt install postgresql-16 postgresql-16-pgvector
+
+# Switch to the postgres user and set up the database
+sudo -i -u postgres
+psql -c "CREATE USER \"user\" WITH SUPERUSER PASSWORD 'password';"
+psql -c "CREATE DATABASE judgeread OWNER \"user\";"
+psql -d judgeread -c "CREATE EXTENSION vector;"
+exit
+```
 
 ## MCP Server
 Judge Read includes a fully functional Model Context Protocol (MCP) server powered by Anthropic's `mcp` SDK. This allows you to expose the underlying PostgreSQL vector database as an intelligent tool directly to other AI applications (like Claude Desktop).

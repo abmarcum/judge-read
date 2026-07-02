@@ -53,11 +53,35 @@ class ConfigModel(BaseModel):
     apiKey: Optional[str] = ""
     langsmithKey: Optional[str] = ""
     cohereKey: Optional[str] = ""
+    pgHost: Optional[str] = "localhost"
+    pgPort: Optional[str] = "5432"
+    pgUser: Optional[str] = "user"
+    pgPassword: Optional[str] = "password"
+    pgDb: Optional[str] = "judgeread"
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
 def get_db_connection():
-    db_url = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/judgeread").replace("+psycopg2", "")
+    pg_host = "localhost"
+    pg_port = "5432"
+    pg_user = "user"
+    pg_password = "password"
+    pg_db = "judgeread"
+    
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                cfg = json.load(f)
+                pg_host = cfg.get("pgHost") or pg_host
+                pg_port = cfg.get("pgPort") or pg_port
+                pg_user = cfg.get("pgUser") or pg_user
+                pg_password = cfg.get("pgPassword") or pg_password
+                pg_db = cfg.get("pgDb") or pg_db
+        except Exception:
+            pass
+            
+    db_url_from_config = f"postgresql://{pg_user}:{pg_password}@{pg_host}:{pg_port}/{pg_db}"
+    db_url = os.getenv("DATABASE_URL", db_url_from_config).replace("+psycopg2", "")
     return psycopg2.connect(db_url)
 
 @app.get("/health")

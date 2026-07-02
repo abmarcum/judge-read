@@ -31,5 +31,6 @@ Start the development server:
 ```bash
 npm run dev
 ```
+*(Note: If you want to access the frontend from another device on your network, start Vite with the host flag: `npm run dev -- --host`)*
 
-The frontend will start at `http://localhost:5173` and route search requests to your local backend API at `http://localhost:8000/api/search`.
+The frontend will start at `http://localhost:5173` (or your local IP) and will dynamically route search requests to your backend API at port 8000 on the same host address.

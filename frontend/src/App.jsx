@@ -37,6 +37,13 @@ function App() {
   const [langsmithKey, setLangsmithKey] = useState('');
   const [cohereKey, setCohereKey] = useState('');
   
+  // Postgres Settings
+  const [pgHost, setPgHost] = useState('localhost');
+  const [pgPort, setPgPort] = useState('5432');
+  const [pgUser, setPgUser] = useState('user');
+  const [pgPassword, setPgPassword] = useState('password');
+  const [pgDb, setPgDb] = useState('judgeread');
+  
   const [isConfigLoaded, setIsConfigLoaded] = useState(false);
 
   useEffect(() => {
@@ -50,6 +57,11 @@ function App() {
       if (data.apiKey) setApiKey(data.apiKey);
       if (data.langsmithKey) setLangsmithKey(data.langsmithKey);
       if (data.cohereKey) setCohereKey(data.cohereKey);
+      if (data.pgHost) setPgHost(data.pgHost);
+      if (data.pgPort) setPgPort(data.pgPort);
+      if (data.pgUser) setPgUser(data.pgUser);
+      if (data.pgPassword) setPgPassword(data.pgPassword);
+      if (data.pgDb) setPgDb(data.pgDb);
       setIsConfigLoaded(true);
     }).catch((err) => {
       console.error("Could not load config", err);
@@ -67,10 +79,15 @@ function App() {
         llmEngine,
         apiKey,
         langsmithKey,
-        cohereKey
+        cohereKey,
+        pgHost,
+        pgPort,
+        pgUser,
+        pgPassword,
+        pgDb
       }).catch(err => console.error("Failed to save config", err));
     }
-  }, [embeddingModel, embeddingKey, llmEngine, apiKey, langsmithKey, cohereKey, isConfigLoaded]);
+  }, [embeddingModel, embeddingKey, llmEngine, apiKey, langsmithKey, cohereKey, pgHost, pgPort, pgUser, pgPassword, pgDb, isConfigLoaded]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -231,6 +248,36 @@ function App() {
               onChange={(e) => setLangsmithKey(e.target.value)} 
             />
           </div>
+
+          <div style={{ marginTop: '16px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: 500, marginBottom: '12px' }}>PostgreSQL</h3>
+            
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+              <div style={{ flex: 2 }}>
+                <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Host</label>
+                <input type="text" className="input-glass" value={pgHost} onChange={(e) => setPgHost(e.target.value)} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Port</label>
+                <input type="text" className="input-glass" value={pgPort} onChange={(e) => setPgPort(e.target.value)} />
+              </div>
+            </div>
+            
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>User</label>
+                <input type="text" className="input-glass" value={pgUser} onChange={(e) => setPgUser(e.target.value)} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Password</label>
+                <input type="password" className="input-glass" value={pgPassword} onChange={(e) => setPgPassword(e.target.value)} />
+              </div>
+            </div>
+
+            <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Database</label>
+            <input type="text" className="input-glass" value={pgDb} onChange={(e) => setPgDb(e.target.value)} />
+          </div>
+
         </div>
       </div>
 
