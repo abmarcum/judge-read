@@ -265,7 +265,9 @@ def main():
     parser.add_argument("--source", choices=["hf", "courtlistener"], default="hf",
                         help="Data source for download (default: hf)")
     parser.add_argument("--limit", type=int, default=None,
-                        help="Only download/extract the first N cases")
+                        help="Only download/extract the first N cases. Omit to download all.")
+    parser.add_argument("--all-cases", action="store_true",
+                        help="Explicitly download and process ALL cases (overrides --limit). Warning: 8+ million cases, 40GB+.")
                         
     # Embedding Options
     parser.add_argument("--embed-provider", choices=["openai", "ollama"], default="openai",
@@ -311,10 +313,13 @@ def main():
         return
 
     if args.action in ["download", "all"]:
+        # If the user passed --all-cases, force the limit to None
+        actual_limit = None if args.all_cases else args.limit
+        
         if args.source == "hf":
-            download_huggingface(limit=args.limit)
+            download_huggingface(limit=actual_limit)
         else:
-            download_courtlistener(limit=args.limit)
+            download_courtlistener(limit=actual_limit)
             
     if args.action in ["embed", "all"]:
         embed_data(db_url, args.embed_provider, args.embed_model, args.embed_key, args.embed_host)

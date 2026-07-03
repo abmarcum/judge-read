@@ -5,9 +5,9 @@ A Retrieval-Augmented Generation (RAG) search engine for attorneys to ground LLM
 ## Architecture
 
 This project is split into three main components:
-1. **Frontend**: A modern, glassmorphism React application built with Vite for attorneys to interface with the LLM and search cases.
-2. **Backend**: A Python FastAPI server that acts as the orchestration layer between the frontend UI, the embedding models, and the Vector Database. It is supercharged with Hybrid Search, Two-Stage Retrieval (Cohere Reranking), Metadata Filtering, and Telemetry/LangSmith tracing.
-3. **Data Pipeline**: A unified Python CLI tool (`data_pipeline.py`) to ingest raw legal opinions from either CourtListener or Hugging Face, clean it, chunk it, embed it, and upsert it into PostgreSQL with `pgvector` and Full-Text Search indexing.
+1. **Frontend**: A modern, glassmorphism React application built with Vite for attorneys to interface with the LLM and search cases. It features a fully responsive `@media` mobile layout and dynamic `Provider:Model` JSON configuration for instant model switching (OpenAI, Anthropic, Ollama).
+2. **Backend**: A Python FastAPI server that acts as the orchestration layer between the frontend UI, the embedding models, and the Vector Database. It is supercharged with Hybrid Search, Two-Stage Retrieval (Cohere Reranking), Metadata Filtering, distinct API keys, and Telemetry/LangSmith tracing.
+3. **Data Pipeline**: A unified Python CLI tool (`data_pipeline.py`) to ingest raw legal opinions from either CourtListener or Hugging Face, clean it, chunk it, embed it, and upsert it into PostgreSQL with `pgvector` and Full-Text Search indexing. It includes an advanced diagnostic test suite (`test_framework.py`) to rigorously verify all system links.
 
 ## Directories
 

@@ -133,3 +133,44 @@ select.input-glass option {
 .scroll-smooth::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.3);
 }
+
+/* Mobile Responsiveness */
+@media (max-width: 768px) {
+  /* Override Header Padding */
+  header {
+    padding: 16px !important;
+  }
+  
+  /* Override Chat Area Padding */
+  .chat-container {
+    padding: 16px !important;
+  }
+  
+  /* Maximize Bubble Widths on Mobile */
+  .chat-bubble {
+    max-width: 95% !important;
+  }
+  
+  /* Input Area Mobile Spacing */
+  .input-container {
+    padding: 16px !important;
+  }
+  
+  /* Case Explorer Modal Mobile Overrides */
+  .explorer-modal {
+    height: 100vh !important;
+    border-radius: 0 !important;
+    max-width: 100% !important;
+  }
+  
+  /* Filter controls stacking */
+  .filter-controls select {
+    min-width: 100% !important;
+    margin-bottom: 8px;
+  }
+
+  /* Make settings panel take full width */
+  .settings-panel {
+    width: 100% !important;
+  }
+}

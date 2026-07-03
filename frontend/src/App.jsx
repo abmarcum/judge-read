@@ -19,10 +19,14 @@ function App() {
   const [isCaseLoading, setIsCaseLoading] = useState(false);
 
   // Settings state
-  const [embeddingModel, setEmbeddingModel] = useState('text-embedding-3-small');
+  const [embeddingModel, setEmbeddingModel] = useState('OpenAI:text-embedding-3-small');
   const [embeddingKey, setEmbeddingKey] = useState('');
+  const [availableEmbeddingModels, setAvailableEmbeddingModels] = useState([]);
   const [llmEngine, setLlmEngine] = useState('claude');
-  const [apiKey, setApiKey] = useState('');
+  const [openaiApiKey, setOpenaiApiKey] = useState('');
+  const [anthropicApiKey, setAnthropicApiKey] = useState('');
+  const [ollamaHost, setOllamaHost] = useState('');
+  const [availableModels, setAvailableModels] = useState([]);
   
   // Metadata Filters
   const [filterYear, setFilterYear] = useState('');
@@ -59,7 +63,9 @@ function App() {
       if (data.embeddingModel) setEmbeddingModel(data.embeddingModel);
       if (data.embeddingKey) setEmbeddingKey(data.embeddingKey);
       if (data.llmEngine) setLlmEngine(data.llmEngine);
-      if (data.apiKey) setApiKey(data.apiKey);
+      if (data.openaiApiKey) setOpenaiApiKey(data.openaiApiKey);
+      if (data.anthropicApiKey) setAnthropicApiKey(data.anthropicApiKey);
+      if (data.ollamaHost) setOllamaHost(data.ollamaHost);
       if (data.langsmithKey) setLangsmithKey(data.langsmithKey);
       if (data.cohereKey) setCohereKey(data.cohereKey);
       if (data.pgHost) setPgHost(data.pgHost);
@@ -67,6 +73,8 @@ function App() {
       if (data.pgUser) setPgUser(data.pgUser);
       if (data.pgPassword) setPgPassword(data.pgPassword);
       if (data.pgDb) setPgDb(data.pgDb);
+      if (data.availableModels) setAvailableModels(data.availableModels);
+      if (data.availableEmbeddingModels) setAvailableEmbeddingModels(data.availableEmbeddingModels);
       setIsConfigLoaded(true);
     }).catch((err) => {
       console.error("Could not load config", err);
@@ -81,17 +89,21 @@ function App() {
         embeddingModel,
         embeddingKey,
         llmEngine,
-        apiKey,
+        openaiApiKey,
+        anthropicApiKey,
+        ollamaHost,
         langsmithKey,
         cohereKey,
         pgHost,
         pgPort,
         pgUser,
         pgPassword,
-        pgDb
+        pgDb,
+        availableModels,
+        availableEmbeddingModels
       }).catch(err => console.error("Failed to save config", err));
     }
-  }, [embeddingModel, embeddingKey, llmEngine, apiKey, langsmithKey, cohereKey, pgHost, pgPort, pgUser, pgPassword, pgDb, isConfigLoaded]);
+  }, [embeddingModel, embeddingKey, llmEngine, openaiApiKey, anthropicApiKey, ollamaHost, langsmithKey, cohereKey, pgHost, pgPort, pgUser, pgPassword, pgDb, availableModels, availableEmbeddingModels, isConfigLoaded]);
 
   const fetchCases = async () => {
     setIsExplorerLoading(true);
@@ -158,7 +170,9 @@ function App() {
         embedding_model: embeddingModel,
         embedding_key: embeddingKey,
         llm_engine: llmEngine,
-        api_key: apiKey,
+        openai_api_key: openaiApiKey,
+        anthropic_api_key: anthropicApiKey,
+        ollama_host: ollamaHost,
         filter_year: filterYear ? parseInt(filterYear) : null,
         filter_court: filterCourt ? filterCourt : null,
         filter_jurisdiction: filterSystem === 'Federal' ? 'Federal' : (filterSystem === 'State' ? (filterState || 'State') : null),
@@ -190,7 +204,7 @@ function App() {
   };
 
   const FilterControls = () => (
-    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', width: '100%' }}>
+    <div className="filter-controls" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', width: '100%' }}>
       <select 
         className="input-glass" 
         value={filterSystem} 
@@ -339,15 +353,14 @@ function App() {
           <div>
             <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.9rem', color: 'var(--text-muted)' }}>Embedding Model</label>
             <select className="input-glass" value={embeddingModel} onChange={(e) => setEmbeddingModel(e.target.value)} style={{ marginBottom: '8px' }}>
-              <option value="text-embedding-3-small">text-embedding-3-small (OpenAI)</option>
-              <option value="text-embedding-3-large">text-embedding-3-large (OpenAI)</option>
-              <option value="claude">Claude Embeddings</option>
-              <option value="ollama">Ollama Embeddings</option>
+              {availableEmbeddingModels.map(model => (
+                <option key={model} value={model}>{model}</option>
+              ))}
             </select>
             <input 
-              type={embeddingModel === 'ollama' ? 'text' : 'password'}
+              type={embeddingModel && embeddingModel.startsWith('Ollama:') ? 'text' : 'password'}
               className="input-glass" 
-              placeholder={embeddingModel === 'ollama' ? 'Host (e.g. http://localhost:11434)' : 'API Key'}
+              placeholder={embeddingModel && embeddingModel.startsWith('Ollama:') ? 'Host (e.g. http://localhost:11434)' : 'API Key'}
               value={embeddingKey} 
               onChange={(e) => setEmbeddingKey(e.target.value)} 
             />
@@ -356,27 +369,42 @@ function App() {
           <div>
             <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.9rem', color: 'var(--text-muted)' }}>LLM Engine</label>
             <select className="input-glass" value={llmEngine} onChange={(e) => setLlmEngine(e.target.value)}>
-              <option value="gpt-5.5-pro">GPT-5.5 Pro</option>
-              <option value="gpt-5.5">GPT-5.5</option>
-              <option value="chat-latest">Chat Latest (OpenAI)</option>
-              <option value="claude-sonnet-5">Claude Sonnet 5</option>
-              <option value="claude-fable-5">Claude Fable 5</option>
-              <option value="claude-opus-4-8">Claude Opus 4.8</option>
-              <option value="o1">OpenAI o1</option>
-              <option value="ollama">Ollama</option>
+              {availableModels.map(model => (
+                <option key={model} value={model}>{model}</option>
+              ))}
             </select>
           </div>
 
           <div>
-            <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-              {llmEngine === 'ollama' ? 'Host URL' : 'API Key'}
-            </label>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.9rem', color: 'var(--text-muted)' }}>OpenAI API Key</label>
             <input 
-              type={llmEngine === 'ollama' ? 'text' : 'password'}
+              type="password"
               className="input-glass" 
-              placeholder={llmEngine === 'ollama' ? 'http://localhost:11434' : 'sk-...'}
-              value={apiKey} 
-              onChange={(e) => setApiKey(e.target.value)} 
+              placeholder="sk-proj-..."
+              value={openaiApiKey} 
+              onChange={(e) => setOpenaiApiKey(e.target.value)} 
+            />
+          </div>
+
+          <div>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.9rem', color: 'var(--text-muted)' }}>Anthropic API Key</label>
+            <input 
+              type="password"
+              className="input-glass" 
+              placeholder="sk-ant-..."
+              value={anthropicApiKey} 
+              onChange={(e) => setAnthropicApiKey(e.target.value)} 
+            />
+          </div>
+
+          <div>
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.9rem', color: 'var(--text-muted)' }}>Ollama Host URL</label>
+            <input 
+              type="text"
+              className="input-glass" 
+              placeholder="http://localhost:11434"
+              value={ollamaHost} 
+              onChange={(e) => setOllamaHost(e.target.value)} 
             />
           </div>
 
@@ -458,9 +486,9 @@ function App() {
         </header>
 
         {/* Chat History */}
-        <div className="scroll-smooth" style={{ flex: 1, overflowY: 'auto', padding: '32px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+        <div className="scroll-smooth chat-container" style={{ flex: 1, overflowY: 'auto', padding: '32px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
           {messages.map((msg, idx) => (
-            <div key={idx} className={`animate-fade-in ${msg.role === 'user' ? 'user-msg' : 'assistant-msg'}`} style={{
+            <div key={idx} className={`animate-fade-in chat-bubble ${msg.role === 'user' ? 'user-msg' : 'assistant-msg'}`} style={{
               alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
               maxWidth: '80%', display: 'flex', flexDirection: 'column', gap: '8px'
             }}>
@@ -519,7 +547,7 @@ function App() {
         </div>
 
         {/* Input Area */}
-        <div style={{ padding: '24px 32px', background: 'linear-gradient(to top, rgba(11,15,25,1) 50%, rgba(11,15,25,0))' }}>
+        <div className="input-container" style={{ padding: '24px 32px', background: 'linear-gradient(to top, rgba(11,15,25,1) 50%, rgba(11,15,25,0))' }}>
           
           {/* External Search Filters */}
           <div style={{
@@ -569,7 +597,7 @@ function App() {
           zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center',
           padding: '20px'
         }}>
-          <div className="glass-panel animate-fade-in" style={{
+          <div className="glass-panel animate-fade-in explorer-modal" style={{
             width: '100%', maxWidth: '1200px', height: '90vh', display: 'flex', flexDirection: 'column',
             background: 'var(--panel-bg)', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 20px 40px rgba(0,0,0,0.5)'
           }}>

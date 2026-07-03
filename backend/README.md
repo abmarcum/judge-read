@@ -15,6 +15,8 @@ The orchestration logic and data ingestion pipeline for the Judge Read engine.
 - `main.py` - The FastAPI entrypoint handling dynamic inference requests from the frontend, augmented with raw SQL for Hybrid Search, Metadata Filtering, Chat History, Telemetry logging, Cohere Reranking, and fetching full case documents via `GET /api/cases/{case_id}`.
 - `data_pipeline.py` - A unified CLI tool that handles downloading raw data, extracting it into `data/`, cleaning it, assigning metadata, storing the full original document into Postgres, chunking it, and embedding it into the vector database.
 - `db_setup.py` - Initializes the Postgres relational schema (`full_cases`, `chat_sessions`, `chat_messages`, `analytics_queries`) and creates the `tsvector` index for Full-Text Search.
+- `test_framework.py` - An advanced diagnostic suite that rigorously tests Frontend Asset payloads, Backend APIs, CORS configurations, Database Full-Text Search (`ts_rank_cd`), `pgvector` schemas, and LLM model reachability.
+- `config.json` - A dynamic configuration file that stores your API keys (`openaiApiKey`, `anthropicApiKey`, `ollamaHost`) and a list of available `Provider:Model` strings (e.g. `OpenAI:gpt-5.5-pro`, `Anthropic:claude-sonnet-5`) mapped to the UI.
 
 ## Setup & Running
 
@@ -84,7 +86,7 @@ To inspect the MCP Server or use it locally:
 export OPENAI_API_KEY="your-key-here"
 
 # Run the MCP Server Inspector
-uv run mcp dev mcp_server.py
+uv run mcp dev main.py:mcp
 ```
 
 Other AI agents can use the `search_case_law` tool exposed by this server to natively execute vector searches with all of the granular metadata filters (Year, Court, Jurisdiction, Good Law status).

@@ -12,6 +12,7 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from mcp.server.fastmcp import FastMCP
 
 app = FastAPI(title="Judge Read API")
 
@@ -29,7 +30,9 @@ class QueryRequest(BaseModel):
     embedding_model: str = "text-embedding-3-small"
     embedding_key: Optional[str] = ""
     llm_engine: str = "claude"
-    api_key: str = ""
+    openai_api_key: Optional[str] = ""
+    anthropic_api_key: Optional[str] = ""
+    ollama_host: Optional[str] = "http://localhost:11434"
     # Metadata filters
     filter_year: Optional[int] = None
     filter_court: Optional[str] = None
@@ -51,7 +54,9 @@ class ConfigModel(BaseModel):
     embeddingModel: Optional[str] = "text-embedding-3-small"
     embeddingKey: Optional[str] = ""
     llmEngine: Optional[str] = "claude"
-    apiKey: Optional[str] = ""
+    openaiApiKey: Optional[str] = ""
+    anthropicApiKey: Optional[str] = ""
+    ollamaHost: Optional[str] = "http://localhost:11434"
     langsmithKey: Optional[str] = ""
     cohereKey: Optional[str] = ""
     pgHost: Optional[str] = "localhost"
@@ -59,6 +64,8 @@ class ConfigModel(BaseModel):
     pgUser: Optional[str] = "user"
     pgPassword: Optional[str] = "password"
     pgDb: Optional[str] = "judgeread"
+    availableModels: Optional[List[str]] = []
+    availableEmbeddingModels: Optional[List[str]] = []
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
@@ -126,7 +133,7 @@ def fetch_from_postgres(cursor, hybrid_search_sql, query, filter_params):
         return []
 
 @traceable(name="llm_generation", run_type="llm")
-def generate_answer(llm_engine: str, api_key: str, sources: list, cursor, session_id: int):
+def generate_answer(llm_engine: str, openai_key: str, anthropic_key: str, ollama_host: str, sources: list, cursor, session_id: int):
     # Fetch chat history
     cursor.execute("SELECT role, content FROM chat_messages WHERE session_id = %s ORDER BY created_at ASC", (session_id,))
     history_rows = cursor.fetchall()
@@ -160,15 +167,24 @@ CONTEXT:
         "claude-fable-5": "claude-3-haiku-20240307",
         "claude-opus-4-8": "claude-3-opus-20240229"
     }
-    actual_model = model_map.get(llm_engine, "gpt-4o-mini")
-
     try:
-        if llm_engine.startswith("claude"):
-            llm = ChatAnthropic(model_name=actual_model, anthropic_api_key=api_key)
-        elif llm_engine == "ollama":
-            llm = ChatOllama(model="qwen3.6:35b-a3b", base_url=api_key)
+        if ":" in llm_engine:
+            provider, actual_model = llm_engine.split(":", 1)
+            if provider == "Anthropic":
+                llm = ChatAnthropic(model_name=actual_model, anthropic_api_key=anthropic_key)
+            elif provider == "Ollama":
+                llm = ChatOllama(model=actual_model, base_url=ollama_host)
+            else:
+                llm = ChatOpenAI(model=actual_model, api_key=openai_key)
         else:
-            llm = ChatOpenAI(model=actual_model, api_key=api_key)
+            # Legacy fallback
+            actual_model = model_map.get(llm_engine, "gpt-4o-mini")
+            if llm_engine.startswith("claude"):
+                llm = ChatAnthropic(model_name=actual_model, anthropic_api_key=anthropic_key)
+            elif llm_engine == "ollama":
+                llm = ChatOllama(model="qwen3-coder", base_url=ollama_host)
+            else:
+                llm = ChatOpenAI(model=actual_model, api_key=openai_key)
             
         response = llm.invoke(messages)
         return response.content
@@ -195,18 +211,29 @@ def _run_search_pipeline(req: QueryRequest):
     
     # Create Embedding for the query
     try:
-        if req.embedding_model == "ollama":
-            from langchain_ollama import OllamaEmbeddings
-            embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=req.embedding_key)
+        if ":" in req.embedding_model:
+            provider, actual_model = req.embedding_model.split(":", 1)
+            if provider == "Ollama":
+                from langchain_ollama import OllamaEmbeddings
+                embeddings = OllamaEmbeddings(model=actual_model, base_url=req.embedding_key)
+            else: # defaults to OpenAI
+                if req.embedding_key:
+                    os.environ["OPENAI_API_KEY"] = req.embedding_key
+                embeddings = OpenAIEmbeddings(model=actual_model)
         else:
-            if req.embedding_key:
-                os.environ["OPENAI_API_KEY"] = req.embedding_key
-            embeddings = OpenAIEmbeddings(model=req.embedding_model)
+            # Legacy fallback
+            if req.embedding_model == "ollama":
+                from langchain_ollama import OllamaEmbeddings
+                embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=req.embedding_key)
+            else:
+                if req.embedding_key:
+                    os.environ["OPENAI_API_KEY"] = req.embedding_key
+                embeddings = OpenAIEmbeddings(model=req.embedding_model)
             
         query_embedding = embeddings.embed_query(req.query)
     except Exception as e:
         print(f"Embedding failed (using mock vector): {e}")
-        query_embedding = [0.0] * 1536 if req.embedding_model != "ollama" else [0.0] * 768
+        query_embedding = [0.0] * 1536 if "Ollama" not in req.embedding_model and "ollama" not in req.embedding_model else [0.0] * 768
         
     # Hybrid Search Query + Metadata Filtering
     vector_query = f"'[{','.join(map(str, query_embedding))}]'"
@@ -307,7 +334,7 @@ def _run_search_pipeline(req: QueryRequest):
     conn.commit()
 
     # Generate Answer using LLM
-    answer = generate_answer(req.llm_engine, req.api_key, sources, cursor, session_id)
+    answer = generate_answer(req.llm_engine, req.openai_api_key, req.anthropic_api_key, req.ollama_host, sources, cursor, session_id)
     
     # Save Assistant message
     cursor.execute("INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)", 
@@ -391,6 +418,100 @@ def list_cases(
     cursor.close()
     conn.close()
     return {"cases": [dict(c) for c in cases]}
+
+# ---------------------------------------------------------
+# MCP Server Integration
+# ---------------------------------------------------------
+mcp = FastMCP("Judge Read Database")
+
+@mcp.tool()
+def search_case_law(query: str, year: int = None, court: str = None, jurisdiction: str = None, status: str = None) -> list[str]:
+    """
+    Search the Judge Read vector database for relevant case law.
+    
+    Args:
+        query: The semantic search query (e.g. "Is a tomato a fruit or a vegetable for tax purposes?")
+        year: Filter for cases decided in or after this year (e.g. 2015)
+        court: Filter for a specific court (e.g. "US Supreme Court")
+        jurisdiction: Filter for a specific jurisdiction ("Federal", "California", etc.)
+        status: Set to "good_law" to exclude overruled cases.
+    """
+    OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+    if not OPENAI_API_KEY:
+        return ["Error: OPENAI_API_KEY environment variable is not set. Cannot generate embeddings for semantic search."]
+        
+    try:
+        embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=OPENAI_API_KEY)
+        query_embedding = embeddings.embed_query(query)
+    except Exception as e:
+        return [f"Error generating embedding: {e}"]
+
+    # Connect to DB using the shared utility
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+    except Exception as e:
+        return [f"Error connecting to database: {e}"]
+
+    vector_query = f"'[{','.join(map(str, query_embedding))}]'"
+    
+    filter_sql = ""
+    filter_params = []
+    if year:
+        filter_sql += " AND (cmetadata->>'year')::int >= %s"
+        filter_params.append(year)
+    if court:
+        filter_sql += " AND cmetadata->>'court' = %s"
+        filter_params.append(court)
+    if jurisdiction:
+        if jurisdiction == 'State':
+            filter_sql += " AND cmetadata->>'jurisdiction' != 'Federal'"
+        else:
+            filter_sql += " AND cmetadata->>'jurisdiction' = %s"
+            filter_params.append(jurisdiction)
+    if status == 'good_law':
+        filter_sql += " AND cmetadata->>'status' = 'good_law'"
+
+    # Use the correct `langchain_pg_embedding` table and join `full_cases`
+    hybrid_search_sql = f"""
+        SELECT 
+            e.document, 
+            e.cmetadata,
+            (e.embedding <=> {vector_query}) AS distance,
+            substring(f.full_text from '"case_name_full":\\s*"([^"]+)"') AS case_name_full
+        FROM langchain_pg_embedding e
+        LEFT JOIN full_cases f ON (e.cmetadata->>'case_id') = f.case_id
+        WHERE 1=1 {filter_sql}
+        ORDER BY distance ASC
+        LIMIT 10;
+    """
+
+    cursor.execute(hybrid_search_sql, tuple(filter_params))
+    results = cursor.fetchall()
+    
+    cursor.close()
+    conn.close()
+
+    if not results:
+        return ["No relevant cases found."]
+
+    formatted_results = []
+    for row in results:
+        doc_text = row[0]
+        meta = row[1]
+        distance = row[2]
+        case_name_full = row[3]
+        
+        case_name = case_name_full or meta.get('name', 'Unknown Case')
+        case_year = meta.get('year', 'Unknown Year')
+        case_court = meta.get('court', 'Unknown Court')
+        case_status = meta.get('status', 'good_law')
+        
+        formatted_results.append(
+            f"Case: {case_name}\\nYear: {case_year}\\nCourt: {case_court}\\nStatus: {case_status}\\nDistance: {distance:.4f}\\nExcerpt:\\n{doc_text[:1000]}..."
+        )
+
+    return formatted_results
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
