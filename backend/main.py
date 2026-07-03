@@ -187,7 +187,18 @@ CONTEXT:
                 llm = ChatOpenAI(model=actual_model, api_key=openai_key)
             
         response = llm.invoke(messages)
-        return response.content
+        
+        # Anthropic and some other models might return a list of dicts for message blocks
+        if isinstance(response.content, list):
+            return "\n".join(
+                b.get("text", "") if isinstance(b, dict) else str(b) 
+                for b in response.content
+            )
+        elif isinstance(response.content, dict):
+            return response.content.get("text", str(response.content))
+        else:
+            return str(response.content)
+            
     except Exception as e:
         print(f"LLM Generation failed: {e}")
         return f"Error communicating with LLM ({llm_engine}): {e}\n\nFallback Answer: Found {len(sources)} cases."
@@ -271,7 +282,7 @@ def _run_search_pipeline(req: QueryRequest):
         FROM langchain_pg_embedding e
         LEFT JOIN full_cases f ON (e.cmetadata->>'case_id') = f.case_id
         WHERE 1=1 {filter_sql.replace('cmetadata', 'e.cmetadata')}
-        ORDER BY (e.embedding <=> {vector_query}) ASC, e.fts_rank DESC
+        ORDER BY (e.embedding <=> {vector_query}) ASC, fts_rank DESC
         LIMIT 30;
     """
     
