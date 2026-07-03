@@ -1,9 +1,20 @@
 import os
+import json
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
 def setup_db():
+    # Attempt to load db config from config.json
     db_url = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/judgeread")
+    if os.path.exists("config.json"):
+        try:
+            with open("config.json", "r") as f:
+                cfg = json.load(f)
+                if all(k in cfg for k in ["pgUser", "pgPassword", "pgHost", "pgPort", "pgDb"]):
+                    db_url = f"postgresql://{cfg['pgUser']}:{cfg['pgPassword']}@{cfg['pgHost']}:{cfg['pgPort']}/{cfg['pgDb']}"
+        except Exception as e:
+            print(f"Warning: Could not read config.json for DB credentials: {e}")
+
     # Wait, the format in LangChain is postgresql+psycopg2://
     # Psycopg2 expects postgresql://
     db_url_clean = db_url.replace("+psycopg2", "")
@@ -27,9 +38,11 @@ def setup_db():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS chat_sessions (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            username VARCHAR(255),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
+    cursor.execute("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS username VARCHAR(255);")
 
     print("Creating messages table for Session Memory...")
     cursor.execute("""

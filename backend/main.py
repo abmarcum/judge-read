@@ -27,6 +27,7 @@ app.add_middleware(
 class QueryRequest(BaseModel):
     query: str
     session_id: Optional[str] = None
+    username: Optional[str] = None
     embedding_model: str = "text-embedding-3-small"
     embedding_key: Optional[str] = ""
     llm_engine: str = "claude"
@@ -211,7 +212,7 @@ def _run_search_pipeline(req: QueryRequest):
     # Session Handling
     session_id = req.session_id
     if not session_id:
-        cursor.execute("INSERT INTO chat_sessions DEFAULT VALUES RETURNING id;")
+        cursor.execute("INSERT INTO chat_sessions (username) VALUES (%s) RETURNING id;", (req.username,))
         session_id = cursor.fetchone()[0]
         conn.commit()
     
@@ -366,6 +367,35 @@ def get_chat_history(session_id: str):
     cursor.close()
     conn.close()
     return {"messages": [{"role": m["role"], "content": m["content"]} for m in messages]}
+
+@app.get("/api/users/{username}/sessions")
+def get_user_sessions(username: str):
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    
+    query = """
+        SELECT s.id, s.created_at, m.content as first_message
+        FROM chat_sessions s
+        LEFT JOIN chat_messages m ON m.session_id = s.id
+        WHERE s.username = %s AND m.role = 'user'
+        AND m.id = (
+            SELECT MIN(id) FROM chat_messages WHERE session_id = s.id AND role = 'user'
+        )
+        ORDER BY s.created_at DESC
+        LIMIT 50;
+    """
+    cursor.execute(query, (username,))
+    sessions = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    
+    return {"sessions": [
+        {
+            "id": str(s["id"]), 
+            "created_at": s["created_at"].isoformat() if s["created_at"] else None,
+            "preview": s["first_message"][:100] + "..." if s["first_message"] and len(s["first_message"]) > 100 else s["first_message"]
+        } for s in sessions
+    ]}
 
 from fastapi import HTTPException
 

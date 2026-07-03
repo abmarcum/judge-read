@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
-import { Search, Settings, Send, Scale, ChevronRight, X, Loader2, Book } from 'lucide-react';
+import { Search, Settings, Send, Scale, ChevronRight, X, Loader2, Book, User } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import './index.css';
 
@@ -13,6 +13,13 @@ function App() {
   ]);
   const messagesEndRef = useRef(null);
   const [sessionId, setSessionId] = useState(null);
+  
+  // Auth & Session History State
+  const [username, setUsername] = useState(() => localStorage.getItem('username') || '');
+  const [tempUsername, setTempUsername] = useState('');
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [userSessions, setUserSessions] = useState([]);
+  const [isSessionsLoading, setIsSessionsLoading] = useState(false);
   
   // Full Case Modal State
   const [selectedCase, setSelectedCase] = useState(null);
@@ -139,6 +146,35 @@ function App() {
     scrollToBottom();
   }, [messages]);
 
+  useEffect(() => {
+    if (username) {
+      fetchUserSessions();
+    }
+  }, [username]);
+
+  const fetchUserSessions = async () => {
+    if (!username) return;
+    setIsSessionsLoading(true);
+    try {
+      const response = await axios.get(`http://${window.location.hostname}:8000/api/users/${username}/sessions`);
+      setUserSessions(response.data.sessions || []);
+    } catch (err) {
+      console.error("Failed to fetch sessions:", err);
+    } finally {
+      setIsSessionsLoading(false);
+    }
+  };
+
+  const loadChatHistory = async (id) => {
+    try {
+      const response = await axios.get(`http://${window.location.hostname}:8000/api/sessions/${id}/history`);
+      setMessages(response.data.messages || []);
+      setSessionId(id);
+    } catch (err) {
+      console.error("Failed to load chat history:", err);
+    }
+  };
+
   const fetchFullCase = async (caseId) => {
     if (!caseId) return;
     setIsCaseLoading(true);
@@ -167,6 +203,7 @@ function App() {
       const response = await axios.post(`http://${window.location.hostname}:8000/api/search`, {
         query: userMessage.content,
         session_id: sessionId,
+        username: username || null,
         embedding_model: embeddingModel,
         embedding_key: embeddingKey,
         llm_engine: llmEngine,
@@ -461,8 +498,11 @@ function App() {
         </div>
       </div>
 
-      {/* Main Chat Area */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', width: '100%', maxWidth: '1200px', margin: '0 auto' }}>
+      {/* App Container for Main Chat and Right Sidebar */}
+      <div style={{ display: 'flex', flex: 1, width: '100%', maxWidth: '1600px', margin: '0 auto' }}>
+        
+        {/* Main Chat Area */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
         
         {/* Header */}
         <header style={{ 
@@ -476,6 +516,11 @@ function App() {
             <h1 style={{ fontSize: '1.5rem', fontWeight: 600, letterSpacing: '-0.5px' }}>Judge Read</h1>
           </div>
           <div style={{ display: 'flex', gap: '12px' }}>
+            <button className="button-icon" onClick={() => {
+              setIsLoginModalOpen(true);
+            }} title={username ? "Profile" : "Login"}>
+              <User size={22} />
+            </button>
             <button className="button-icon" onClick={() => setIsExplorerOpen(true)} title="Case Explorer">
               <Book size={22} />
             </button>
@@ -586,6 +631,57 @@ function App() {
             Retrieval-Augmented Generation relies on localized case repository to prevent hallucinations.
           </div>
         </div>
+
+        </div>
+
+        {/* Right Sidebar for Chat History */}
+        {username && (
+          <div style={{ width: '320px', borderLeft: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.01)', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '20px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Chat History</h3>
+              <button 
+                className="button-icon" 
+                style={{ padding: '4px 8px', fontSize: '0.8rem', color: '#ef4444' }}
+                onClick={() => {
+                  setUsername('');
+                  localStorage.removeItem('username');
+                  setUserSessions([]);
+                }}
+              >
+                Sign Out
+              </button>
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {isSessionsLoading ? (
+                <div style={{ display: 'flex', justifyContent: 'center', padding: '20px' }}><Loader2 size={24} className="animate-spin text-muted" /></div>
+              ) : userSessions.length === 0 ? (
+                <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.9rem', textAlign: 'center', marginTop: '20px' }}>No saved sessions.</p>
+              ) : (
+                userSessions.map(session => (
+                  <div 
+                    key={session.id}
+                    style={{
+                      padding: '12px', background: session.id === sessionId ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.03)', 
+                      borderRadius: '8px', cursor: 'pointer',
+                      border: session.id === sessionId ? '1px solid var(--accent)' : '1px solid var(--border-color)', 
+                      transition: 'all 0.2s'
+                    }}
+                    onClick={() => loadChatHistory(session.id)}
+                    onMouseEnter={(e) => e.currentTarget.style.background = session.id === sessionId ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.08)'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = session.id === sessionId ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.03)'}
+                  >
+                    <div style={{ fontSize: '0.75rem', color: 'var(--accent)', marginBottom: '4px' }}>
+                      {new Date(session.created_at).toLocaleString()}
+                    </div>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--text-main)', lineHeight: '1.4' }}>
+                      {session.preview || "Empty session"}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
 
       </div>
 
@@ -827,6 +923,69 @@ function App() {
         @keyframes spin { 100% { transform: rotate(360deg); } }
         .hover-pill:hover { background: rgba(255,255,255,0.1) !important; color: white !important; transform: translateY(-1px); }
       `}</style>
+      {/* Profile & History Modal */}
+      {isLoginModalOpen && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0, 0, 0, 0.8)', backdropFilter: 'blur(8px)',
+          zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '20px'
+        }}>
+          <div className="glass-panel animate-fade-in" style={{
+            width: '100%', maxWidth: '500px', display: 'flex', flexDirection: 'column',
+            background: 'var(--panel-bg)', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 20px 40px rgba(0,0,0,0.5)',
+            maxHeight: '80vh'
+          }}>
+            <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2 style={{ fontSize: '1.2rem', fontWeight: 600 }}>{username ? `Welcome, ${username}` : 'Login'}</h2>
+              <button className="button-icon" onClick={() => setIsLoginModalOpen(false)}><X size={24} /></button>
+            </div>
+            <div style={{ padding: '24px', overflowY: 'auto' }}>
+              {!username ? (
+                <div>
+                  <p style={{ color: 'var(--text-muted)', marginBottom: '16px', lineHeight: '1.5' }}>
+                    Enter a username to save your chat sessions and review them later. No password required.
+                  </p>
+                  <input 
+                    type="text" 
+                    className="input-glass" 
+                    placeholder="Username" 
+                    value={tempUsername}
+                    onChange={(e) => setTempUsername(e.target.value)}
+                    style={{ marginBottom: '16px' }}
+                  />
+                  <button className="button-primary" style={{ width: '100%' }} onClick={() => {
+                    if (tempUsername.trim()) {
+                      setUsername(tempUsername.trim());
+                      localStorage.setItem('username', tempUsername.trim());
+                    }
+                  }}>
+                    Save Profile
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', alignItems: 'center' }}>
+                  <p style={{ color: 'var(--text-main)', fontSize: '1.1rem' }}>You are logged in as <strong>{username}</strong>.</p>
+                  <p style={{ color: 'var(--text-muted)' }}>Your chat history is displayed in the right sidebar.</p>
+                  <button 
+                    className="button-icon" 
+                    style={{ marginTop: '16px', color: '#ef4444', border: '1px solid #ef4444', padding: '8px 16px', borderRadius: '8px' }}
+                    onClick={() => {
+                      setUsername('');
+                      localStorage.removeItem('username');
+                      setUserSessions([]);
+                      setIsLoginModalOpen(false);
+                    }}
+                  >
+                    Sign Out
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
