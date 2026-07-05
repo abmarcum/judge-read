@@ -36,6 +36,13 @@ const LinkifyCitations = ({ content, onResolve }) => {
   );
 };
 
+const getApiUrl = (path) => {
+  if (window.location.port === '8000' || window.location.port === '' || window.location.port === '80' || window.location.port === '443') {
+    return path;
+  }
+  return `http://${window.location.hostname}:8000${path}`;
+};
+
 function App() {
   const [query, setQuery] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -111,7 +118,7 @@ function App() {
 
   useEffect(() => {
     // Load config on mount
-    axios.get(`http://${window.location.hostname}:8000/api/config`).then((response) => {
+    axios.get(getApiUrl('/api/config')).then((response) => {
       const data = response.data;
       if (data.embeddingModel) setEmbeddingModel(data.embeddingModel);
       if (data.embeddingKey) setEmbeddingKey(data.embeddingKey);
@@ -138,7 +145,7 @@ function App() {
   // Save config whenever it changes
   useEffect(() => {
     if (isConfigLoaded) {
-      axios.post(`http://${window.location.hostname}:8000/api/config`, {
+      axios.post(getApiUrl('/api/config'), {
         embeddingModel,
         embeddingKey,
         llmEngine,
@@ -169,7 +176,7 @@ function App() {
       if (filterSystem === 'State') params.append('system', filterState || 'State');
       if (filterStatus) params.append('status', filterStatus);
 
-      const response = await axios.get(`http://${window.location.hostname}:8000/api/cases?${params.toString()}`);
+      const response = await axios.get(getApiUrl(`/api/cases?${params.toString()}`));
       setExplorerCases(response.data.cases || []);
     } catch (err) {
       console.error("Failed to fetch cases:", err);
@@ -202,7 +209,7 @@ function App() {
     if (!username) return;
     setIsSessionsLoading(true);
     try {
-      const response = await axios.get(`http://${window.location.hostname}:8000/api/users/${username}/sessions`);
+      const response = await axios.get(getApiUrl(`/api/users/${username}/sessions`));
       setUserSessions(response.data.sessions || []);
     } catch (err) {
       console.error("Failed to fetch sessions:", err);
@@ -213,7 +220,7 @@ function App() {
 
   const loadChatHistory = async (id) => {
     try {
-      const response = await axios.get(`http://${window.location.hostname}:8000/api/sessions/${id}/history`);
+      const response = await axios.get(getApiUrl(`/api/sessions/${id}/history`));
       setMessages(response.data.messages || []);
       setSessionId(id);
     } catch (err) {
@@ -226,7 +233,7 @@ function App() {
     setIsCaseLoading(true);
     setSelectedCase(null);
     try {
-      const response = await axios.get(`http://${window.location.hostname}:8000/api/cases/${caseId}`);
+      const response = await axios.get(getApiUrl(`/api/cases/${caseId}`));
       setSelectedCase(response.data);
     } catch (error) {
       console.error("Failed to fetch full case", error);
@@ -238,7 +245,7 @@ function App() {
 
   const resolveAndOpenCitation = async (citationText) => {
     try {
-      const res = await axios.post(`http://${window.location.hostname}:8000/api/citations/resolve`, {
+      const res = await axios.post(getApiUrl('/api/citations/resolve'), {
         text: citationText
       });
       if (res.data.citations && res.data.citations.length > 0) {
@@ -276,7 +283,7 @@ function App() {
     formData.append('expand_query', expandQuery);
     
     try {
-      const response = await axios.post(`http://${window.location.hostname}:8000/api/upload_brief`, formData, {
+      const response = await axios.post(getApiUrl('/api/upload_brief'), formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       
@@ -306,7 +313,7 @@ function App() {
   const fetchAnnotations = async () => {
     if (!sessionId) return;
     try {
-      const res = await axios.get(`http://${window.location.hostname}:8000/api/sessions/${sessionId}/annotations`);
+      const res = await axios.get(getApiUrl(`/api/sessions/${sessionId}/annotations`));
       setAnnotations(res.data.annotations || []);
     } catch (err) {
       console.error("Failed to fetch annotations", err);
@@ -347,7 +354,7 @@ function App() {
     if (!highlightPopover || !selectedCase) return;
     
     try {
-      const res = await axios.post(`http://${window.location.hostname}:8000/api/sessions/${sessionId}/annotations`, {
+      const res = await axios.post(getApiUrl(`/api/sessions/${sessionId}/annotations`), {
         case_id: selectedCase.case_id,
         highlighted_text: highlightPopover.selectedText,
         note: annotationText
@@ -364,7 +371,7 @@ function App() {
 
   const deleteAnnotation = async (annoId) => {
     try {
-      await axios.delete(`http://${window.location.hostname}:8000/api/annotations/${annoId}`);
+      await axios.delete(getApiUrl(`/api/annotations/${annoId}`));
       setAnnotations(prev => prev.filter(a => a.id !== annoId));
     } catch (err) {
       console.error("Failed to delete annotation", err);
@@ -376,13 +383,13 @@ function App() {
       alert("No active session to export.");
       return;
     }
-    window.open(`http://${window.location.hostname}:8000/api/sessions/${sessionId}/export_memo`);
+    window.open(getApiUrl(`/api/sessions/${sessionId}/export_memo`));
   };
 
   const fetchAnalytics = async () => {
     setIsAnalyticsLoading(true);
     try {
-      const res = await axios.get(`http://${window.location.hostname}:8000/api/analytics/dashboard`);
+      const res = await axios.get(getApiUrl('/api/analytics/dashboard'));
       setAnalyticsData(res.data);
     } catch (err) {
       console.error("Failed to fetch analytics", err);
@@ -400,7 +407,7 @@ function App() {
   const runBenchmarkSuite = async () => {
     setIsBenchmarking(true);
     try {
-      const res = await axios.post(`http://${window.location.hostname}:8000/api/benchmark/run`, null, {
+      const res = await axios.post(getApiUrl('/api/benchmark/run'), null, {
         params: {
           embedding_model: embeddingModel,
           embedding_key: embeddingKey,
@@ -1119,7 +1126,7 @@ function App() {
     setIsLoading(true);
 
     try {
-      const response = await axios.post(`http://${window.location.hostname}:8000/api/search`, {
+      const response = await axios.post(getApiUrl('/api/search'), {
         query: userMessage.content,
         session_id: sessionId,
         username: username || null,
