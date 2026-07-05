@@ -10,13 +10,13 @@ The following diagram illustrates how the three main components of Judge Read in
 
 ```mermaid
 graph TD
-    subgraph Data Ingestion Pipeline (Offline)
+    subgraph "Data Ingestion Pipeline (Offline)"
         CL[CourtListener API] --> DP[Data Pipeline CLI]
         HF[Hugging Face Dataset] --> DP
         DP --> |Clean & Chunk| DB[(PostgreSQL + pgvector)]
     end
 
-    subgraph User Query & Inference Flow (Online)
+    subgraph "User Query & Inference Flow (Online)"
         User[Attorney / User] <-->|UI Interaction| FE[React/Vite Frontend]
         FE <-->|REST API / Port 8000| BE[FastAPI Backend]
         BE <-->|Hybrid Search & Metadata Filters| DB
