@@ -109,58 +109,287 @@ def embed_data(db_url, embed_provider, embed_model, embed_key, embed_host):
     import subprocess
     subprocess.run(["python", "db_setup.py"], env=dict(os.environ, DATABASE_URL=db_url))
 
-    print("Loading raw documents from repository...")
-    loader = DirectoryLoader(EXTRACT_DIR, glob="**/*.*", loader_cls=TextLoader)
-    raw_documents = loader.load()
+    print("Loading and standardizing case documents from repository...")
+    import glob
+    import json
+    import uuid
+    import re
+    from bs4 import BeautifulSoup
+    from langchain_core.documents import Document
+    import psycopg2
+
+    file_paths = glob.glob(os.path.join(EXTRACT_DIR, "**/*.*"), recursive=True)
+    raw_documents = []
+    full_cases_to_insert = []
+
+    def clean_html_text(html_content):
+        if not html_content:
+            return ""
+        try:
+            # BeautifulSoup cleaning specifically for target HTML tags
+            soup = BeautifulSoup(str(html_content), "html.parser")
+            return soup.get_text(separator="\n", strip=True)
+        except Exception:
+            return str(html_content)
+
+    def determine_status(text):
+        if not text:
+            return "good_law"
+        text_lower = text.lower()
+        if "overruled by" in text_lower or "is overruled" in text_lower:
+            return "overruled"
+        elif "reversed" in text_lower or "vacated" in text_lower or "distinguished by" in text_lower:
+            return "caution"
+        return "good_law"
+
+    def determine_topic(text):
+        if not text:
+            return "Civil"
+        text_lower = text.lower()
+        if any(w in text_lower for w in ["patent", "trademark", "copyright", "infringement", "patentable"]):
+            return "Intellectual Property"
+        elif any(w in text_lower for w in ["tax", "revenue", "irs", "income tax", "taxpayer"]):
+            return "Tax"
+        elif any(w in text_lower for w in ["murder", "criminal", "felony", "guilty", "sentence", "arrest", "prosecut"]):
+            return "Criminal"
+        elif any(w in text_lower for w in ["constitutional", "first amendment", "equal protection", "due process", "fourteenth amendment"]):
+            return "Constitutional"
+        return "Civil"
+
+    # Select lists for fallback mock values if dataset does not contain specific field
+    STATES = ["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming"]
+    FEDERAL_COURTS = ["US Supreme Court", "US Court of Appeals (1st Circuit)", "US Court of Appeals (2nd Circuit)", "US Court of Appeals (3rd Circuit)", "US Court of Appeals (4th Circuit)", "US Court of Appeals (5th Circuit)", "US Court of Appeals (6th Circuit)", "US Court of Appeals (7th Circuit)", "US Court of Appeals (8th Circuit)", "US Court of Appeals (9th Circuit)", "US Court of Appeals (10th Circuit)", "US Court of Appeals (11th Circuit)", "US Court of Appeals (DC Circuit)", "US Court of Appeals (Federal Circuit)", "US District Court"]
+    STATE_COURTS = ["State Supreme Court", "State Court of Appeals", "Superior Court", "Circuit Court", "District Court"]
+
+    import random
+    
+    for path in tqdm(file_paths, desc="Parsing & Formatting cases"):
+        if not os.path.isfile(path) or os.path.basename(path).startswith('.'):
+            continue
+            
+        case_id = os.path.splitext(os.path.basename(path))[0]
+        
+        is_json = False
+        data = None
+        if path.endswith(".json"):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                is_json = True
+            except Exception as e:
+                print(f"Warning: Failed to parse {path} as JSON: {e}. Falling back to plain text loader.")
+
+        if is_json and data:
+            name = (
+                data.get("case_name_full") or 
+                data.get("case_name") or 
+                data.get("name") or 
+                data.get("name_abbreviation") or
+                data.get("slug") or
+                f"Case {case_id}"
+            )
+            
+            date_filed = data.get("date_filed") or data.get("decision_date") or data.get("date") or ""
+            year = None
+            if date_filed:
+                year_match = re.search(r"\b(1[789]\d{2}|20\d{2})\b", str(date_filed))
+                if year_match:
+                    year = int(year_match.group(1))
+            if not year:
+                year = random.choice([1998, 2005, 2015, 2021, 2023])
+
+            court = (
+                data.get("court_full_name") or 
+                data.get("court") or 
+                data.get("court_short_name") or
+                random.choice(FEDERAL_COURTS + STATE_COURTS)
+            )
+            if isinstance(court, dict):
+                court = court.get("name") or court.get("full_name") or "Unknown Court"
+
+            jurisdiction = (
+                data.get("court_jurisdiction") or 
+                data.get("jurisdiction") or 
+                ""
+            )
+            if isinstance(jurisdiction, dict):
+                jurisdiction = jurisdiction.get("name") or jurisdiction.get("name_long") or ""
+            
+            # Map jurisdiction to USA/Federal vs State
+            if not jurisdiction or "Federal" in jurisdiction or "USA" in jurisdiction:
+                jurisdiction = "Federal"
+            else:
+                matched_state = "Federal"
+                for state in STATES:
+                    if state.lower() in jurisdiction.lower():
+                        matched_state = state
+                        break
+                jurisdiction = matched_state
+
+            citations_raw = data.get("citations") or data.get("citation") or []
+            if isinstance(citations_raw, str):
+                citations = [citations_raw]
+            elif isinstance(citations_raw, list):
+                citations = []
+                for c in citations_raw:
+                    if isinstance(c, dict):
+                        citations.append(c.get("cite") or c.get("citation") or "")
+                    else:
+                        citations.append(str(c))
+                citations = [c for c in citations if c]
+            else:
+                citations = []
+            reporter = citations[0] if citations else f"{year} U.S. {case_id}"
+
+            opinions_raw = data.get("opinions") or []
+            opinions = []
+            opinion_texts = []
+
+            if isinstance(opinions_raw, dict):
+                opinions_raw = [opinions_raw]
+            elif isinstance(opinions_raw, str):
+                opinions_raw = [{"opinion_text": opinions_raw}]
+
+            for op in opinions_raw:
+                op_text = op.get("opinion_text") or op.get("text") or op.get("plain_text") or op.get("html") or op.get("html_lawbox") or op.get("html_columbia") or op.get("html_with_citations") or op.get("text_plain") or ""
+                op_text = clean_html_text(op_text)
+                opinion_texts.append(op_text)
+                opinions.append({
+                    "author_str": op.get("author_str") or op.get("author") or "Court",
+                    "download_url": op.get("download_url") or "",
+                    "opinion_text": op_text
+                })
+
+            if not opinions and "casebody" in data:
+                cb = data["casebody"]
+                if isinstance(cb, dict) and "data" in cb:
+                    cb_data = cb["data"]
+                    if isinstance(cb_data, dict) and "opinions" in cb_data:
+                        opinions_raw = cb_data["opinions"]
+                        for op in opinions_raw:
+                            op_text = op.get("opinion_text") or op.get("text") or ""
+                            op_text = clean_html_text(op_text)
+                            opinion_texts.append(op_text)
+                            opinions.append({
+                                "author_str": op.get("author_str") or op.get("author") or "Court",
+                                "download_url": "",
+                                "opinion_text": op_text
+                            })
+
+            if not opinions:
+                for k in ["opinion_text", "text", "plain_text", "html", "body", "case_text"]:
+                    val = data.get(k)
+                    if val and isinstance(val, str):
+                        op_text = clean_html_text(val)
+                        opinion_texts.append(op_text)
+                        opinions.append({
+                            "author_str": "Court",
+                            "download_url": "",
+                            "opinion_text": op_text
+                        })
+                        break
+
+            full_opinions_text = "\n\n".join(opinion_texts)
+            summary = clean_html_text(data.get("summary") or "")
+            syllabus = clean_html_text(data.get("syllabus") or "")
+            headnotes = clean_html_text(data.get("headnotes") or "")
+            headmatter = clean_html_text(data.get("headmatter") or "")
+            
+            judges = data.get("judges") or ""
+            if isinstance(judges, list):
+                judges = ", ".join(judges)
+            attorneys = data.get("attorneys") or ""
+            if isinstance(attorneys, list):
+                attorneys = ", ".join(attorneys)
+
+            status = determine_status(full_opinions_text or summary)
+            topic = determine_topic(full_opinions_text or summary)
+            judge = random.choice(["Smith", "Kagan", "Roberts", "Sotomayor", "Alito", "Thomas"]) # Mock fallback
+
+            std_payload = {
+                "case_name_full": name,
+                "date_filed": date_filed,
+                "court_full_name": court,
+                "judges": judges,
+                "attorneys": attorneys,
+                "citations": citations,
+                "summary": summary,
+                "syllabus": syllabus,
+                "headnotes": headnotes,
+                "headmatter": headmatter,
+                "opinions": opinions
+            }
+            full_text_json = json.dumps(std_payload, ensure_ascii=False, default=str)
+            
+            plain_text_for_embedding = f"{name}\n"
+            if court:
+                plain_text_for_embedding += f"Court: {court}\n"
+            if citations:
+                plain_text_for_embedding += f"Citations: {', '.join(citations)}\n"
+            if summary:
+                plain_text_for_embedding += f"\nSummary:\n{summary}\n"
+            if syllabus:
+                plain_text_for_embedding += f"\nSyllabus:\n{syllabus}\n"
+            for op in opinions:
+                plain_text_for_embedding += f"\nOpinion ({op.get('author_str')}):\n{op.get('opinion_text')}\n"
+
+        else:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    raw_content = f.read()
+            except Exception as e:
+                print(f"Error reading {path}: {e}")
+                continue
+
+            cleaned_content = clean_html_text(raw_content)
+            name = f"Case {case_id}"
+            reporter = f"Unpublished Case {case_id}"
+            court = random.choice(FEDERAL_COURTS + STATE_COURTS)
+            jurisdiction = "Federal"
+            year = random.choice([1998, 2005, 2015, 2021, 2023])
+            status = determine_status(cleaned_content)
+            topic = determine_topic(cleaned_content)
+            judge = "Unknown Judge"
+
+            std_payload = {
+                "case_name_full": name,
+                "date_filed": "",
+                "court_full_name": court,
+                "opinions": [{"author_str": "Court", "opinion_text": cleaned_content}]
+            }
+            full_text_json = json.dumps(std_payload, ensure_ascii=False, default=str)
+            plain_text_for_embedding = cleaned_content
+
+        full_cases_to_insert.append({
+            "case_id": case_id,
+            "name": name,
+            "reporter": reporter,
+            "court": court,
+            "jurisdiction": jurisdiction,
+            "year": year,
+            "status": status,
+            "full_text": full_text_json
+        })
+
+        doc = Document(
+            page_content=plain_text_for_embedding,
+            metadata={
+                "case_id": case_id,
+                "name": name,
+                "reporter": reporter,
+                "court": court,
+                "jurisdiction": jurisdiction,
+                "year": year,
+                "status": status,
+                "judge": judge,
+                "topic": topic
+            }
+        )
+        raw_documents.append(doc)
 
     if not raw_documents:
         print("No documents found in repository.")
         return
-
-    import random
-    import uuid
-    import psycopg2
-    
-    print(f"Found {len(raw_documents)} raw documents. Cleaning text and extracting metadata...")
-    for doc in tqdm(raw_documents, desc="Cleaning & Metadata Setup"):
-        # In a real scenario, you'd only call this if doc is HTML
-        doc.page_content = extract_text_from_html(doc.page_content)
-        
-        # Generate a unique case_id so chunks can map back to the full case
-        doc.metadata["case_id"] = str(uuid.uuid4())
-        
-        # Simulate extraction of metadata for FTS and Filtering
-        # For HF datasets, we could parse the JSON string in doc.page_content here.
-        # But we will mock the parsed fields for this implementation:
-        doc.metadata["year"] = random.choice([1998, 2005, 2015, 2021, 2023])
-        STATES = ["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming"]
-        
-        FEDERAL_COURTS = [
-            "US Supreme Court", "US Court of Appeals (1st Circuit)", "US Court of Appeals (2nd Circuit)", 
-            "US Court of Appeals (3rd Circuit)", "US Court of Appeals (4th Circuit)", "US Court of Appeals (5th Circuit)",
-            "US Court of Appeals (6th Circuit)", "US Court of Appeals (7th Circuit)", "US Court of Appeals (8th Circuit)",
-            "US Court of Appeals (9th Circuit)", "US Court of Appeals (10th Circuit)", "US Court of Appeals (11th Circuit)",
-            "US Court of Appeals (DC Circuit)", "US Court of Appeals (Federal Circuit)", "US District Court", 
-            "US Bankruptcy Court", "US Tax Court", "US Court of Federal Claims", "US Court of International Trade", 
-            "US Court of Appeals for Veterans Claims", "US Court of Appeals for the Armed Forces"
-        ]
-        STATE_COURTS = [
-            "State Supreme Court", "State Court of Appeals", "Superior Court", "Circuit Court", 
-            "District Court", "Municipal Court", "Justice Court", "Magistrate Court", 
-            "Family Court", "Probate Court", "Juvenile Court", "Small Claims Court", 
-            "Traffic Court", "Workers' Compensation Court"
-        ]
-        
-        system = random.choice(["Federal", "State"])
-        if system == "Federal":
-            doc.metadata["jurisdiction"] = "Federal"
-            doc.metadata["court"] = random.choice(FEDERAL_COURTS)
-        else:
-            doc.metadata["jurisdiction"] = random.choice(STATES)
-            doc.metadata["court"] = random.choice(STATE_COURTS)
-        doc.metadata["status"] = random.choice(["good_law", "good_law", "good_law", "overruled", "caution"])
-        doc.metadata["judge"] = random.choice(["Smith", "Kagan", "Roberts", "Sotomayor", "Alito", "Thomas"])
-        doc.metadata["topic"] = random.choice(["Criminal", "Civil", "Tax", "Intellectual Property", "Constitutional"])
 
     print("Saving full cases to Postgres database...")
     db_url_clean = db_url.replace("+psycopg2", "")
@@ -172,19 +401,26 @@ def embed_data(db_url, embed_provider, embed_model, embed_key, embed_host):
         insert_query = """
             INSERT INTO full_cases (case_id, name, reporter, court, jurisdiction, year, status, full_text)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (case_id) DO NOTHING;
+            ON CONFLICT (case_id) DO UPDATE 
+            SET name = EXCLUDED.name,
+                reporter = EXCLUDED.reporter,
+                court = EXCLUDED.court,
+                jurisdiction = EXCLUDED.jurisdiction,
+                year = EXCLUDED.year,
+                status = EXCLUDED.status,
+                full_text = EXCLUDED.full_text;
         """
         
-        for doc in tqdm(raw_documents, desc="Inserting Full Cases to Postgres"):
+        for case in tqdm(full_cases_to_insert, desc="Inserting Full Cases to Postgres"):
             cursor.execute(insert_query, (
-                doc.metadata.get("case_id"),
-                doc.metadata.get("name", "Unknown Case"),
-                doc.metadata.get("reporter", "Unknown Reporter"),
-                doc.metadata.get("court"),
-                doc.metadata.get("jurisdiction"),
-                doc.metadata.get("year"),
-                doc.metadata.get("status"),
-                doc.page_content
+                case["case_id"],
+                case["name"],
+                case["reporter"],
+                case["court"],
+                case["jurisdiction"],
+                case["year"],
+                case["status"],
+                case["full_text"]
             ))
             
         conn.commit()

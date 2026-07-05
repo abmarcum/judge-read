@@ -4,6 +4,38 @@ import { Search, Settings, Send, Scale, ChevronRight, X, Loader2, Book, User } f
 import ReactMarkdown from 'react-markdown';
 import './index.css';
 
+const LinkifyCitations = ({ content, onResolve }) => {
+  const citRegex = /\b(\d+)\s+((?:U\.S\.|F\.(?:2d|3d|4th)?|F\.\s*Supp\.(?:2d|3d)?|S\.\s*Ct\.|L\.\s*Ed\.(?:2d)?|A\.(?:2d|3d)?|P\.(?:2d|3d)?|N\.\s*E\.(?:2d)?|N\.\s*W\.(?:2d)?|S\.\s*E\.(?:2d)?|S\.\s*W\.(?:2d)?|So\.(?:2d|3d)?))\s+(\d+)\b/gi;
+  
+  const linkifiedContent = content.replace(citRegex, (match) => {
+    return `[${match}](citation://${encodeURIComponent(match)})`;
+  });
+  
+  return (
+    <ReactMarkdown 
+      className="markdown-body"
+      components={{
+        a: ({ href, children }) => {
+          if (href && href.startsWith('citation://')) {
+            const citationText = decodeURIComponent(href.replace('citation://', ''));
+            return (
+              <span 
+                className="citation-link" 
+                onClick={() => onResolve(citationText)}
+              >
+                {children}
+              </span>
+            );
+          }
+          return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+        }
+      }}
+    >
+      {linkifiedContent}
+    </ReactMarkdown>
+  );
+};
+
 function App() {
   const [query, setQuery] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -62,6 +94,20 @@ function App() {
   const [explorerSearch, setExplorerSearch] = useState('');
   const [explorerCases, setExplorerCases] = useState([]);
   const [isExplorerLoading, setIsExplorerLoading] = useState(false);
+
+  // Advanced Suite State
+  const [activeTab, setActiveTab] = useState('chat'); // chat, explorer, dashboard, benchmark
+  const [isSplitScreen, setIsSplitScreen] = useState(false);
+  const [isBriefUploading, setIsBriefUploading] = useState(false);
+  const [uploadedBriefName, setUploadedBriefName] = useState('');
+  const [expandQuery, setExpandQuery] = useState(false);
+  const [annotations, setAnnotations] = useState([]);
+  const [analyticsData, setAnalyticsData] = useState(null);
+  const [isAnalyticsLoading, setIsAnalyticsLoading] = useState(false);
+  const [benchmarkData, setBenchmarkData] = useState(null);
+  const [isBenchmarking, setIsBenchmarking] = useState(false);
+  const [highlightPopover, setHighlightPopover] = useState(null); // { x, y, text }
+  const [annotationText, setAnnotationText] = useState('');
 
   useEffect(() => {
     // Load config on mount
@@ -190,6 +236,870 @@ function App() {
     }
   };
 
+  const resolveAndOpenCitation = async (citationText) => {
+    try {
+      const res = await axios.post(`http://${window.location.hostname}:8000/api/citations/resolve`, {
+        text: citationText
+      });
+      if (res.data.citations && res.data.citations.length > 0) {
+        fetchFullCase(res.data.citations[0].case_id);
+      } else {
+        alert(`Citation "${citationText}" was recognized, but it was not found in the local database.`);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleBriefUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    setUploadedBriefName(file.name);
+    setIsBriefUploading(true);
+    setIsLoading(true);
+    
+    const userMessage = { role: 'user', content: `Uploaded Legal Brief: ${file.name}` };
+    setMessages(prev => [...prev, userMessage]);
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    if (sessionId) formData.append('session_id', sessionId);
+    if (username) formData.append('username', username);
+    formData.append('embedding_model', embeddingModel);
+    formData.append('embedding_key', embeddingKey);
+    formData.append('llm_engine', llmEngine);
+    formData.append('openai_api_key', openaiApiKey);
+    formData.append('anthropic_api_key', anthropicApiKey);
+    formData.append('ollama_host', ollamaHost);
+    if (cohereKey) formData.append('cohere_key', cohereKey);
+    formData.append('expand_query', expandQuery);
+    
+    try {
+      const response = await axios.post(`http://${window.location.hostname}:8000/api/upload_brief`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      
+      if (!sessionId && response.data.session_id) {
+        setSessionId(response.data.session_id);
+      }
+      
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: response.data.answer,
+        sources: response.data.sources
+      }]);
+    } catch (err) {
+      console.error("Brief upload failed", err);
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `Failed to process uploaded brief: ${err.response?.data?.detail || err.message}`,
+        error: true
+      }]);
+    } finally {
+      setIsBriefUploading(false);
+      setIsLoading(false);
+      setUploadedBriefName('');
+    }
+  };
+
+  const fetchAnnotations = async () => {
+    if (!sessionId) return;
+    try {
+      const res = await axios.get(`http://${window.location.hostname}:8000/api/sessions/${sessionId}/annotations`);
+      setAnnotations(res.data.annotations || []);
+    } catch (err) {
+      console.error("Failed to fetch annotations", err);
+    }
+  };
+
+  useEffect(() => {
+    if (sessionId) {
+      fetchAnnotations();
+    }
+  }, [sessionId, selectedCase]);
+
+  const handleTextSelection = () => {
+    const selection = window.getSelection();
+    const text = selection.toString().trim();
+    if (text.length > 5) {
+      try {
+        const range = selection.getRangeAt(0);
+        const rect = range.getBoundingClientRect();
+        setHighlightPopover({
+          x: rect.left + window.scrollX,
+          y: rect.bottom + window.scrollY + 10,
+          selectedText: text
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    } else {
+      setHighlightPopover(null);
+    }
+  };
+
+  const saveHighlight = async () => {
+    if (!sessionId) {
+      alert("Please start a search query or conversation first to create a session for annotations.");
+      return;
+    }
+    if (!highlightPopover || !selectedCase) return;
+    
+    try {
+      const res = await axios.post(`http://${window.location.hostname}:8000/api/sessions/${sessionId}/annotations`, {
+        case_id: selectedCase.case_id,
+        highlighted_text: highlightPopover.selectedText,
+        note: annotationText
+      });
+      setAnnotations(prev => [res.data, ...prev]);
+      setAnnotationText('');
+      setHighlightPopover(null);
+      window.getSelection().removeAllRanges();
+    } catch (err) {
+      console.error("Failed to save annotation", err);
+      alert("Error saving highlight annotation.");
+    }
+  };
+
+  const deleteAnnotation = async (annoId) => {
+    try {
+      await axios.delete(`http://${window.location.hostname}:8000/api/annotations/${annoId}`);
+      setAnnotations(prev => prev.filter(a => a.id !== annoId));
+    } catch (err) {
+      console.error("Failed to delete annotation", err);
+    }
+  };
+
+  const handleExportMemo = () => {
+    if (!sessionId) {
+      alert("No active session to export.");
+      return;
+    }
+    window.open(`http://${window.location.hostname}:8000/api/sessions/${sessionId}/export_memo`);
+  };
+
+  const fetchAnalytics = async () => {
+    setIsAnalyticsLoading(true);
+    try {
+      const res = await axios.get(`http://${window.location.hostname}:8000/api/analytics/dashboard`);
+      setAnalyticsData(res.data);
+    } catch (err) {
+      console.error("Failed to fetch analytics", err);
+    } finally {
+      setIsAnalyticsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'dashboard') {
+      fetchAnalytics();
+    }
+  }, [activeTab]);
+
+  const runBenchmarkSuite = async () => {
+    setIsBenchmarking(true);
+    try {
+      const res = await axios.post(`http://${window.location.hostname}:8000/api/benchmark/run`, null, {
+        params: {
+          embedding_model: embeddingModel,
+          embedding_key: embeddingKey,
+          cohere_key: cohereKey
+        }
+      });
+      setBenchmarkData(res.data);
+    } catch (err) {
+      console.error("Failed to run benchmarks", err);
+      alert("Benchmark execution failed: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setIsBenchmarking(false);
+    }
+  };
+
+  const renderCaseReader = (scase, loading, isSplit) => {
+    if (loading) {
+      return (
+        <div style={{ display: 'flex', flex: 1, justifyContent: 'center', alignItems: 'center', padding: '40px', height: '100%' }}>
+          <Loader2 className="spinner" size={32} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent)' }} />
+        </div>
+      );
+    }
+    if (!scase) return null;
+
+    let parsed = null;
+    if (scase.full_text) {
+      try {
+        let rawText = scase.full_text;
+        rawText = rawText.replace(/[\u0000-\u001F]+/g, (match) => {
+          return match.split('').map(char => {
+            if (char === '\n') return '\\n';
+            if (char === '\r') return '\\r';
+            if (char === '\t') return '\\t';
+            if (char === '\f') return '\\f';
+            return '';
+          }).join('');
+        });
+        parsed = JSON.parse(rawText);
+      } catch (e) {
+        // not JSON
+      }
+    }
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', flex: 1, overflow: 'hidden' }}>
+        <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(20,25,35,0.4)' }}>
+          <div>
+            <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '350px' }}>
+              {parsed && parsed.case_name_full ? parsed.case_name_full : scase.name}
+            </h2>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+              {scase.reporter} • {scase.court} • {scase.year}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button 
+              className="button-icon" 
+              onClick={() => setIsSplitScreen(!isSplitScreen)} 
+              title={isSplitScreen ? "Maximize View" : "Split View Mode"}
+              style={{ color: isSplitScreen ? 'var(--accent-hover)' : 'inherit', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+            >
+              {isSplitScreen ? "Full Screen" : "Split Screen"}
+            </button>
+            <button className="button-icon" onClick={() => { setSelectedCase(null); if (!isSplit) setIsCaseLoading(false); }}>
+              <X size={20} />
+            </button>
+          </div>
+        </div>
+
+        <div 
+          className="scroll-smooth" 
+          onMouseUp={handleTextSelection}
+          style={{ flex: 1, overflowY: 'auto', padding: '24px', fontSize: '0.95rem', lineHeight: '1.7', color: 'var(--text-main)', position: 'relative' }}
+        >
+          {highlightPopover && (
+            <div 
+              className="highlight-popover" 
+              style={{ top: `${highlightPopover.y - 120}px`, left: `${Math.min(highlightPopover.x - 100, window.innerWidth - 300)}px` }}
+              onMouseUp={(e) => e.stopPropagation()}
+            >
+              <div style={{ fontSize: '0.8rem', fontWeight: 'bold', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '4px', color: 'var(--text-main)' }}>
+                Annotate Highlight
+              </div>
+              <textarea 
+                placeholder="Add your attorney note here..."
+                value={annotationText}
+                onChange={(e) => setAnnotationText(e.target.value)}
+                rows={3}
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px' }}>
+                <button 
+                  className="button-icon" 
+                  onClick={() => setHighlightPopover(null)} 
+                  style={{ padding: '4px 8px', fontSize: '0.75rem' }}
+                >
+                  Cancel
+                </button>
+                <button 
+                  className="button-primary" 
+                  onClick={saveHighlight}
+                  style={{ padding: '4px 10px', fontSize: '0.75rem', borderRadius: '4px' }}
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+
+          {parsed ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              <div style={{ background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                <h3 style={{ marginTop: 0, color: 'var(--accent)', fontSize: '1rem', marginBottom: '8px' }}>Metadata Details</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: '8px 12px', fontSize: '0.85rem' }}>
+                  {parsed.case_name_full && <><span style={{ color: 'var(--text-muted)' }}>Name:</span><span>{parsed.case_name_full}</span></>}
+                  {parsed.date_filed && <><span style={{ color: 'var(--text-muted)' }}>Filed:</span><span>{parsed.date_filed}</span></>}
+                  {parsed.court_full_name && <><span style={{ color: 'var(--text-muted)' }}>Court:</span><span>{parsed.court_full_name}</span></>}
+                  {parsed.judges && <><span style={{ color: 'var(--text-muted)' }}>Judges:</span><span>{parsed.judges}</span></>}
+                  {parsed.attorneys && <><span style={{ color: 'var(--text-muted)' }}>Attorneys:</span><span>{parsed.attorneys}</span></>}
+                  {parsed.citations && parsed.citations.length > 0 && <><span style={{ color: 'var(--text-muted)' }}>Citations:</span><span>{parsed.citations.join(', ')}</span></>}
+                </div>
+              </div>
+              
+              {parsed.summary && (
+                <div>
+                  <h3 style={{ color: 'var(--accent)', fontSize: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>Summary</h3>
+                  <ReactMarkdown>{parsed.summary}</ReactMarkdown>
+                </div>
+              )}
+              
+              {parsed.syllabus && (
+                <div>
+                  <h3 style={{ color: 'var(--accent)', fontSize: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>Syllabus</h3>
+                  <ReactMarkdown>{parsed.syllabus}</ReactMarkdown>
+                </div>
+              )}
+
+              {parsed.headnotes && (
+                <div>
+                  <h3 style={{ color: 'var(--accent)', fontSize: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>Headnotes</h3>
+                  <ReactMarkdown>{parsed.headnotes}</ReactMarkdown>
+                </div>
+              )}
+
+              {parsed.opinions && parsed.opinions.length > 0 && (
+                <div>
+                  <h3 style={{ color: 'var(--accent)', fontSize: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>Opinions</h3>
+                  {parsed.opinions.map((o, idx) => (
+                    <div key={idx} style={{ marginTop: '12px' }}>
+                      {o.author_str && <h4 style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Author: {o.author_str}</h4>}
+                      <ReactMarkdown>{o.opinion_text}</ReactMarkdown>
+                      {idx < parsed.opinions.length - 1 && <hr style={{ borderColor: 'rgba(255,255,255,0.05)', margin: '20px 0' }}/>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <ReactMarkdown>{scase.full_text}</ReactMarkdown>
+          )}
+
+          {annotations.length > 0 && (
+            <div className="annotations-sidebar-section">
+              <h3 style={{ color: 'var(--accent)', fontSize: '1.05rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px', marginTop: '24px' }}>
+                Attorney Highlights & Notes ({annotations.filter(a => a.case_id === scase.case_id).length})
+              </h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
+                {annotations.filter(a => a.case_id === scase.case_id).map(anno => (
+                  <div key={anno.id} className="annotation-item-card animate-fade-in">
+                    <div className="annotation-item-text">
+                      "{anno.highlighted_text}"
+                    </div>
+                    {anno.note && (
+                      <div style={{ color: 'var(--text-main)', fontWeight: 'normal', marginTop: '4px' }}>
+                        Note: {anno.note}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        {new Date(anno.created_at).toLocaleDateString()}
+                      </span>
+                      <button 
+                        onClick={() => deleteAnnotation(anno.id)} 
+                        style={{ color: '#ef4444', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '0.75rem' }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderHeader = () => (
+    <header style={{ 
+      padding: '20px 32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      borderBottom: '1px solid var(--border-color)', background: 'rgba(11, 15, 25, 0.8)', backdropFilter: 'blur(10px)'
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ background: 'var(--accent)', padding: '8px', borderRadius: '12px', boxShadow: '0 0 15px var(--accent-glow)' }}>
+          <Scale size={24} color="white" />
+        </div>
+        <h1 style={{ fontSize: '1.5rem', fontWeight: 600, letterSpacing: '-0.5px' }}>Judge Read</h1>
+        <div className="tabs-navigation">
+          <button className={`tab-button ${activeTab === 'chat' ? 'active' : ''}`} onClick={() => setActiveTab('chat')}>
+            Research Chat
+          </button>
+          <button className={`tab-button ${activeTab === 'explorer' ? 'active' : ''}`} onClick={() => setActiveTab('explorer')}>
+            Case Explorer
+          </button>
+          <button className={`tab-button ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>
+            DB Analytics
+          </button>
+          <button className={`tab-button ${activeTab === 'benchmark' ? 'active' : ''}`} onClick={() => setActiveTab('benchmark')}>
+            Performance
+          </button>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: '12px' }}>
+        <button className="button-icon" onClick={() => setIsLoginModalOpen(true)} title={username ? "Profile" : "Login"}>
+          <User size={22} />
+        </button>
+        <button className="button-icon" onClick={() => setActiveTab('explorer')} title="Case Explorer">
+          <Book size={22} />
+        </button>
+        <button className="button-icon" onClick={() => setIsSettingsOpen(true)}>
+          <Settings size={22} />
+        </button>
+      </div>
+    </header>
+  );
+
+  const renderRightSidebar = () => (
+    <div style={{ width: '320px', borderLeft: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.01)', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '20px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Chat History</h3>
+        <button 
+          className="button-icon" 
+          style={{ padding: '4px 8px', fontSize: '0.8rem', color: '#ef4444' }}
+          onClick={() => {
+            setUsername('');
+            localStorage.removeItem('username');
+            setUserSessions([]);
+          }}
+        >
+          Sign Out
+        </button>
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {isSessionsLoading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '20px' }}><Loader2 size={24} className="animate-spin text-muted" /></div>
+        ) : userSessions.length === 0 ? (
+          <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.9rem', textAlign: 'center', marginTop: '20px' }}>No saved sessions.</p>
+        ) : (
+          userSessions.map(session => (
+            <div 
+              key={session.id}
+              style={{
+                padding: '12px', background: session.id === sessionId ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.03)', 
+                borderRadius: '8px', cursor: 'pointer',
+                border: session.id === sessionId ? '1px solid var(--accent)' : '1px solid var(--border-color)', 
+                transition: 'all 0.2s'
+              }}
+              onClick={() => loadChatHistory(session.id)}
+              onMouseEnter={(e) => e.currentTarget.style.background = session.id === sessionId ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.08)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = session.id === sessionId ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.03)'}
+            >
+              <div style={{ fontSize: '0.75rem', color: 'var(--accent)', marginBottom: '4px' }}>
+                {new Date(session.created_at).toLocaleString()}
+              </div>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-main)', lineHeight: '1.4' }}>
+                {session.preview || "Empty session"}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+
+  const renderTabContent = () => {
+    if (activeTab === 'chat') {
+      return (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div className="scroll-smooth chat-container" style={{ flex: 1, overflowY: 'auto', padding: '32px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            {messages.map((msg, idx) => (
+              <div key={idx} className={`animate-fade-in chat-bubble ${msg.role === 'user' ? 'user-msg' : 'assistant-msg'}`} style={{
+                alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                maxWidth: '80%', display: 'flex', flexDirection: 'column', gap: '8px'
+              }}>
+                <div style={{ 
+                  padding: '16px 20px', 
+                  borderRadius: '16px',
+                  background: msg.role === 'user' ? 'var(--accent)' : 'var(--panel-bg)',
+                  border: msg.role === 'user' ? 'none' : '1px solid var(--border-color)',
+                  color: msg.role === 'user' ? 'white' : 'var(--text-main)',
+                  boxShadow: msg.role === 'user' ? '0 4px 15px var(--accent-glow)' : '0 4px 15px rgba(0,0,0,0.2)',
+                  borderBottomRightRadius: msg.role === 'user' ? '4px' : '16px',
+                  borderTopLeftRadius: msg.role === 'assistant' ? '4px' : '16px',
+                  lineHeight: '1.6'
+                }}>
+                  <LinkifyCitations content={msg.content} onResolve={resolveAndOpenCitation} />
+                </div>
+                
+                {msg.sources && msg.sources.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '4px' }}>
+                    {msg.sources.map((src, i) => (
+                      <div 
+                        key={i} 
+                        onClick={() => fetchFullCase(src.case_id)}
+                        style={{ 
+                          fontSize: '0.8rem', padding: '6px 12px', background: 'rgba(255,255,255,0.05)', 
+                          borderRadius: '20px', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '4px',
+                          color: 'var(--text-muted)', cursor: src.case_id ? 'pointer' : 'default',
+                          transition: 'all 0.2s ease'
+                        }}
+                        className={src.case_id ? 'hover-pill' : ''}
+                      >
+                        <ChevronRight size={14} /> {src.name} ({src.reporter})
+                        {src.overruled && (
+                          <span style={{ 
+                            background: 'rgba(255, 50, 50, 0.2)', color: '#ff6b6b', 
+                            padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', marginLeft: '4px' 
+                          }}>
+                            OVERRULED
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+            {isLoading && (
+              <div className="animate-fade-in" style={{ alignSelf: 'flex-start', padding: '16px 20px', borderRadius: '16px', background: 'var(--panel-bg)', border: '1px solid var(--border-color)' }}>
+                <Loader2 className="spinner" size={20} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent)' }} />
+              </div>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+
+          <div className="input-container" style={{ padding: '24px 32px', background: 'linear-gradient(to top, rgba(11,15,25,1) 50%, rgba(11,15,25,0))' }}>
+            <div style={{
+              display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px',
+              background: 'rgba(255, 255, 255, 0.02)', padding: '16px', borderRadius: '16px',
+              border: '1px solid rgba(255, 255, 255, 0.08)', width: '100%'
+            }}>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 'bold' }}>
+                Search Filters
+              </div>
+              <FilterControls />
+            </div>
+
+            <form onSubmit={handleSearch} className="glass-panel" style={{ 
+              display: 'flex', alignItems: 'center', padding: '8px 16px', borderRadius: '24px',
+              border: '1px solid rgba(255,255,255,0.15)'
+            }}>
+              <Search size={20} color="var(--text-muted)" style={{ margin: '0 8px' }} />
+              <input 
+                type="text" 
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search case law (e.g., 'Texas cases on implied warranty...')" 
+                style={{
+                  flex: 1, background: 'transparent', border: 'none', color: 'var(--text-main)',
+                  padding: '12px 8px', fontSize: '1rem', outline: 'none', fontFamily: 'Outfit'
+                }}
+                disabled={isLoading}
+              />
+              <button type="submit" className="button-primary" style={{ padding: '10px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '40px', height: '40px' }} disabled={isLoading || !query.trim()}>
+                <Send size={18} style={{ marginLeft: '2px' }} />
+              </button>
+            </form>
+            
+            {isBriefUploading && (
+              <div className="file-chip animate-fade-in" style={{ marginTop: '8px' }}>
+                <Loader2 className="spinner" size={14} style={{ animation: 'spin 1s linear infinite' }} /> Processing Brief...
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: 'var(--text-muted)' }}>
+                  <input 
+                    type="file" 
+                    accept=".txt,.pdf" 
+                    style={{ display: 'none' }} 
+                    onChange={handleBriefUpload}
+                    disabled={isBriefUploading || isLoading}
+                  />
+                  <Book size={16} /> {isBriefUploading ? "Parsing Brief..." : "Analyze Legal Brief (PDF/TXT)"}
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                  <input 
+                    type="checkbox" 
+                    checked={expandQuery} 
+                    onChange={(e) => setExpandQuery(e.target.checked)} 
+                    style={{ cursor: 'pointer' }}
+                  />
+                  LLM Query Expansion
+                </label>
+              </div>
+              {sessionId && (
+                <button 
+                  className="button-icon" 
+                  onClick={handleExportMemo} 
+                  style={{ fontSize: '0.8rem', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: '6px', border: '1px solid var(--border-color)', borderRadius: '6px' }}
+                >
+                  Export Memo
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+    
+    if (activeTab === 'explorer') {
+      return (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '24px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', background: 'var(--panel-bg)', borderRadius: '16px', border: '1px solid var(--border-color)', padding: '24px', height: '100%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', borderBottom: '1px solid var(--border-color)', paddingBottom: '16px' }}>
+              <Book size={24} color="var(--accent)" />
+              <h2 style={{ fontSize: '1.2rem', fontWeight: 600 }}>Case Precedent Explorer</h2>
+            </div>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+                <Search size={20} color="var(--text-muted)" style={{ position: 'absolute', marginLeft: '16px' }} />
+                <input 
+                  type="text" 
+                  value={explorerSearch}
+                  onChange={(e) => setExplorerSearch(e.target.value)}
+                  placeholder="Filter case names..."
+                  className="input-glass"
+                  style={{ width: '100%', padding: '10px 16px 10px 44px', borderRadius: '8px' }}
+                />
+              </div>
+              <FilterControls />
+            </div>
+
+            <div style={{ flex: 1, overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+              {isExplorerLoading ? (
+                <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+                  <Loader2 className="spinner" size={32} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent)' }} />
+                </div>
+              ) : explorerCases.length === 0 ? (
+                <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                  No cases found. Try adjusting filters.
+                </div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                  <thead style={{ position: 'sticky', top: 0, background: 'var(--bg-color)', zIndex: 1 }}>
+                    <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                      <th style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>Case Name</th>
+                      <th style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>Year</th>
+                      <th style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>Court</th>
+                      <th style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {explorerCases.map(c => (
+                      <tr 
+                        key={c.case_id} 
+                        onClick={() => fetchFullCase(c.case_id)}
+                        style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', cursor: 'pointer', transition: 'background 0.2s' }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.04)'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <td style={{ padding: '12px 16px', color: 'var(--accent-hover)', fontWeight: 500 }}>{c.name}</td>
+                        <td style={{ padding: '12px 16px' }}>{c.year}</td>
+                        <td style={{ padding: '12px 16px' }}>{c.court} ({c.jurisdiction})</td>
+                        <td style={{ padding: '12px 16px' }}>
+                          <span style={{ 
+                            color: c.status === 'good_law' ? '#51cf66' : (c.status === 'overruled' ? '#ff6b6b' : '#fcc419'),
+                            background: c.status === 'good_law' ? 'rgba(81,207,102,0.1)' : (c.status === 'overruled' ? 'rgba(255,107,107,0.1)' : 'rgba(252,196,25,0.1)'),
+                            padding: '4px 8px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600
+                          }}>
+                            {c.status === 'good_law' ? 'Good Law' : (c.status === 'overruled' ? 'Overruled' : 'Caution')}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+    
+    if (activeTab === 'dashboard') {
+      return (
+        <div className="dashboard-grid scroll-smooth">
+          {isAnalyticsLoading ? (
+            <div style={{ gridColumn: '1/-1', display: 'flex', justifyContent: 'center', padding: '100px' }}>
+              <Loader2 className="spinner" size={32} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent)' }} />
+            </div>
+          ) : !analyticsData ? (
+            <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '100px', color: 'var(--text-muted)' }}>
+              No database statistics available. Check connection.
+            </div>
+          ) : (
+            <>
+              <div className="glass-panel dashboard-card">
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Total Cases Ingested</div>
+                <div className="dashboard-stat-num">{analyticsData.total_cases.toLocaleString()}</div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>US State & Federal opinions index</div>
+              </div>
+
+              <div className="glass-panel dashboard-card">
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Queries Processed</div>
+                <div className="dashboard-stat-num">{analyticsData.total_queries.toLocaleString()}</div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Total LLM & Hybrid searches run</div>
+              </div>
+
+              <div className="glass-panel dashboard-card" style={{ gridColumn: 'span 2' }}>
+                <h3 style={{ fontSize: '1rem', color: 'var(--accent)', margin: 0 }}>Precedent Citator Statuses</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '12px' }}>
+                  {analyticsData.status_distribution.map(status => {
+                    const pct = ((status.count / analyticsData.total_cases) * 100).toFixed(1);
+                    return (
+                      <div key={status.status} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                          <span style={{ textTransform: 'uppercase', fontWeight: 500 }}>
+                            {status.status === 'good_law' ? '✅ Good Law' : (status.status === 'overruled' ? '❌ Overruled' : '⚠️ Caution')}
+                          </span>
+                          <span>{status.count.toLocaleString()} cases ({pct}%)</span>
+                        </div>
+                        <div className="progress-bar-container">
+                          <div className="progress-bar-fill" style={{ 
+                            width: `${pct}%`,
+                            background: status.status === 'good_law' ? '#51cf66' : (status.status === 'overruled' ? '#ff6b6b' : '#fcc419')
+                          }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="glass-panel dashboard-card">
+                <h3 style={{ fontSize: '1rem', color: 'var(--accent)', margin: 0 }}>Top Courts Represented</h3>
+                <ul className="dashboard-list" style={{ marginTop: '12px' }}>
+                  {analyticsData.court_distribution.map(court => (
+                    <li key={court.court} className="dashboard-list-item" style={{ fontSize: '0.85rem' }}>
+                      <span style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={court.court}>{court.court}</span>
+                      <span style={{ color: 'var(--text-muted)' }}>{court.count} cases</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="glass-panel dashboard-card">
+                <h3 style={{ fontSize: '1rem', color: 'var(--accent)', margin: 0 }}>Top Legal Categories</h3>
+                <ul className="dashboard-list" style={{ marginTop: '12px' }}>
+                  {analyticsData.topic_distribution.map(topic => (
+                    <li key={topic.topic} className="dashboard-list-item" style={{ fontSize: '0.85rem' }}>
+                      <span>{topic.topic}</span>
+                      <span style={{ color: 'var(--text-muted)' }}>{topic.count} tags</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="glass-panel dashboard-card">
+                <h3 style={{ fontSize: '1rem', color: 'var(--accent)', margin: 0 }}>Top Search Queries</h3>
+                <ul className="dashboard-list" style={{ marginTop: '12px' }}>
+                  {analyticsData.top_queries.map(q => (
+                    <li key={q.query} className="dashboard-list-item" style={{ fontSize: '0.85rem' }}>
+                      <span style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={q.query}>"{q.query}"</span>
+                      <span style={{ color: 'var(--text-muted)' }}>{q.count} times</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </>
+          )}
+        </div>
+      );
+    }
+    
+    if (activeTab === 'benchmark') {
+      return (
+        <div className="benchmark-container scroll-smooth">
+          <div className="glass-panel" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '16px' }}>
+              <div>
+                <h2 style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-main)' }}>Search Latency Benchmark Suite</h2>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  Runs controlled searches using standard legal questions to measure step-by-step performance.
+                </p>
+              </div>
+              <button className="button-primary" onClick={runBenchmarkSuite} disabled={isBenchmarking}>
+                {isBenchmarking ? "Running Benchmarks..." : "Run Benchmark Test"}
+              </button>
+            </div>
+
+            {isBenchmarking ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', padding: '40px' }}>
+                <Loader2 className="spinner" size={40} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent)' }} />
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Executing 5 hybrid queries & reranking runs...</p>
+              </div>
+            ) : benchmarkData ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                <div>
+                  <h3 style={{ fontSize: '1rem', color: 'var(--accent)', marginBottom: '16px' }}>Average Execution Times (ms)</h3>
+                  <div className="benchmark-chart">
+                    <div className="chart-bar-row">
+                      <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>1. Embedding Generation</span>
+                      <div className="chart-bar-container">
+                        <div 
+                          className="chart-bar-fill chart-bar-embedding" 
+                          style={{ width: `${Math.max(5, Math.min(100, (benchmarkData.averages.embedding_ms / benchmarkData.averages.total_ms) * 100))}%` }}
+                        >
+                          {benchmarkData.averages.embedding_ms} ms
+                        </div>
+                      </div>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', textAlign: 'right' }}>
+                        {((benchmarkData.averages.embedding_ms / benchmarkData.averages.total_ms) * 100).toFixed(0)}%
+                      </span>
+                    </div>
+
+                    <div className="chart-bar-row">
+                      <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>2. pgvector + FTS Search</span>
+                      <div className="chart-bar-container">
+                        <div 
+                          className="chart-bar-fill chart-bar-database" 
+                          style={{ width: `${Math.max(5, Math.min(100, (benchmarkData.averages.database_ms / benchmarkData.averages.total_ms) * 100))}%` }}
+                        >
+                          {benchmarkData.averages.database_ms} ms
+                        </div>
+                      </div>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', textAlign: 'right' }}>
+                        {((benchmarkData.averages.database_ms / benchmarkData.averages.total_ms) * 100).toFixed(0)}%
+                      </span>
+                    </div>
+
+                    <div className="chart-bar-row">
+                      <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>3. Cohere Reranking</span>
+                      <div className="chart-bar-container">
+                        <div 
+                          className="chart-bar-fill chart-bar-rerank" 
+                          style={{ width: `${Math.max(5, Math.min(100, (benchmarkData.averages.rerank_ms / benchmarkData.averages.total_ms) * 100))}%` }}
+                        >
+                          {benchmarkData.averages.rerank_ms} ms
+                        </div>
+                      </div>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', textAlign: 'right' }}>
+                        {((benchmarkData.averages.rerank_ms / benchmarkData.averages.total_ms) * 100).toFixed(0)}%
+                      </span>
+                    </div>
+
+                    <hr style={{ borderColor: 'rgba(255,255,255,0.05)', margin: '8px 0' }} />
+
+                    <div className="chart-bar-row" style={{ fontWeight: 'bold' }}>
+                      <span>Average Query Latency</span>
+                      <span></span>
+                      <span style={{ color: 'var(--accent-hover)', textAlign: 'right' }}>{benchmarkData.averages.total_ms} ms</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <h3 style={{ fontSize: '1rem', color: 'var(--accent)', marginBottom: '12px' }}>Query Latency Breakdowns</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {benchmarkData.queries.map((q, idx) => (
+                      <div key={idx} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <div style={{ fontSize: '0.9rem', fontWeight: 500 }}>"{q.query}"</div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                            Embed: {q.latency.embedding_ms}ms | DB Search: {q.latency.database_ms}ms | Rerank: {q.latency.rerank_ms}ms
+                          </div>
+                        </div>
+                        <div style={{ fontWeight: 'bold', color: 'var(--text-main)', fontSize: '0.9rem' }}>
+                          {q.latency.total_ms} ms
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.9rem' }}>
+                Benchmark has not been run in this workspace session yet.
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+  };
+
   const handleSearch = async (e) => {
     e.preventDefault();
     if (!query.trim()) return;
@@ -217,7 +1127,8 @@ function App() {
         filter_judge: filterJudge ? filterJudge : null,
         filter_topic: filterTopic ? filterTopic : null,
         langsmith_key: langsmithKey ? langsmithKey : null,
-        cohere_key: cohereKey ? cohereKey : null
+        cohere_key: cohereKey ? cohereKey : null,
+        expand_query: expandQuery
       });
 
       if (!sessionId && response.data.session_id) {
@@ -498,424 +1409,44 @@ function App() {
         </div>
       </div>
 
-      {/* App Container for Main Chat and Right Sidebar */}
-      <div style={{ display: 'flex', flex: 1, width: '100%', maxWidth: '1600px', margin: '0 auto' }}>
-        
-        {/* Main Chat Area */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-        
-        {/* Header */}
-        <header style={{ 
-          padding: '20px 32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          borderBottom: '1px solid var(--border-color)', background: 'rgba(11, 15, 25, 0.8)', backdropFilter: 'blur(10px)'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ background: 'var(--accent)', padding: '8px', borderRadius: '12px', boxShadow: '0 0 15px var(--accent-glow)' }}>
-              <Scale size={24} color="white" />
-            </div>
-            <h1 style={{ fontSize: '1.5rem', fontWeight: 600, letterSpacing: '-0.5px' }}>Judge Read</h1>
+      {/* Dynamic View container supporting Split Screen and standard modes */}
+      {isSplitScreen && selectedCase ? (
+        <div className="split-workspace animate-fade-in" style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden' }}>
+          {/* Left Column: Interactive Tab Workspace */}
+          <div className="split-chat-pane">
+            {renderHeader()}
+            {renderTabContent()}
           </div>
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <button className="button-icon" onClick={() => {
-              setIsLoginModalOpen(true);
-            }} title={username ? "Profile" : "Login"}>
-              <User size={22} />
-            </button>
-            <button className="button-icon" onClick={() => setIsExplorerOpen(true)} title="Case Explorer">
-              <Book size={22} />
-            </button>
-            <button className="button-icon" onClick={() => setIsSettingsOpen(true)}>
-              <Settings size={22} />
-            </button>
-          </div>
-        </header>
-
-        {/* Chat History */}
-        <div className="scroll-smooth chat-container" style={{ flex: 1, overflowY: 'auto', padding: '32px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          {messages.map((msg, idx) => (
-            <div key={idx} className={`animate-fade-in chat-bubble ${msg.role === 'user' ? 'user-msg' : 'assistant-msg'}`} style={{
-              alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
-              maxWidth: '80%', display: 'flex', flexDirection: 'column', gap: '8px'
-            }}>
-              <div style={{ 
-                padding: '16px 20px', 
-                borderRadius: '16px',
-                background: msg.role === 'user' ? 'var(--accent)' : 'var(--panel-bg)',
-                border: msg.role === 'user' ? 'none' : '1px solid var(--border-color)',
-                color: msg.role === 'user' ? 'white' : 'var(--text-main)',
-                boxShadow: msg.role === 'user' ? '0 4px 15px var(--accent-glow)' : '0 4px 15px rgba(0,0,0,0.2)',
-                borderBottomRightRadius: msg.role === 'user' ? '4px' : '16px',
-                borderTopLeftRadius: msg.role === 'assistant' ? '4px' : '16px',
-                lineHeight: '1.6'
-              }}>
-                <ReactMarkdown className="markdown-body">
-                  {msg.content}
-                </ReactMarkdown>
-              </div>
-              
-              {/* Sources render if assistant and has sources */}
-              {msg.sources && msg.sources.length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '4px' }}>
-                  {msg.sources.map((src, i) => (
-                    <div 
-                      key={i} 
-                      onClick={() => fetchFullCase(src.case_id)}
-                      style={{ 
-                        fontSize: '0.8rem', padding: '6px 12px', background: 'rgba(255,255,255,0.05)', 
-                        borderRadius: '20px', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '4px',
-                        color: 'var(--text-muted)', cursor: src.case_id ? 'pointer' : 'default',
-                        transition: 'all 0.2s ease'
-                      }}
-                      className={src.case_id ? 'hover-pill' : ''}
-                    >
-                      <ChevronRight size={14} /> {src.name} ({src.reporter})
-                      {src.overruled && (
-                        <span style={{ 
-                          background: 'rgba(255, 50, 50, 0.2)', color: '#ff6b6b', 
-                          padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', marginLeft: '4px' 
-                        }}>
-                          OVERRULED
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-          {isLoading && (
-            <div className="animate-fade-in" style={{ alignSelf: 'flex-start', padding: '16px 20px', borderRadius: '16px', background: 'var(--panel-bg)', border: '1px solid var(--border-color)' }}>
-              <Loader2 className="spinner" size={20} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent)' }} />
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Input Area */}
-        <div className="input-container" style={{ padding: '24px 32px', background: 'linear-gradient(to top, rgba(11,15,25,1) 50%, rgba(11,15,25,0))' }}>
           
-          {/* External Search Filters */}
-          <div style={{
-            display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px',
-            background: 'rgba(255, 255, 255, 0.02)', padding: '16px', borderRadius: '16px',
-            border: '1px solid rgba(255, 255, 255, 0.08)', width: '100%'
-          }}>
-            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 'bold' }}>
-              Search Filters
-            </div>
-            
-            <FilterControls />
-          </div>
-
-          <form onSubmit={handleSearch} className="glass-panel" style={{ 
-            display: 'flex', alignItems: 'center', padding: '8px 16px', borderRadius: '24px',
-            border: '1px solid rgba(255,255,255,0.15)'
-          }}>
-            <Search size={20} color="var(--text-muted)" style={{ margin: '0 8px' }} />
-            <input 
-              type="text" 
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search case law (e.g., 'Texas cases on implied warranty...')" 
-              style={{
-                flex: 1, background: 'transparent', border: 'none', color: 'var(--text-main)',
-                padding: '12px 8px', fontSize: '1rem', outline: 'none', fontFamily: 'Outfit'
-              }}
-              disabled={isLoading}
-            />
-            <button type="submit" className="button-primary" style={{ padding: '10px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '40px', height: '40px' }} disabled={isLoading || !query.trim()}>
-              <Send size={18} style={{ marginLeft: '2px' }} />
-            </button>
-          </form>
-          <div style={{ textAlign: 'center', marginTop: '12px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            Retrieval-Augmented Generation relies on localized case repository to prevent hallucinations.
+          {/* Right Column: Case Precedent Reading Panel */}
+          <div className="split-reading-pane" style={{ borderLeft: '1px solid var(--border-color)' }}>
+            {renderCaseReader(selectedCase, isCaseLoading, true)}
           </div>
         </div>
-
-        </div>
-
-        {/* Right Sidebar for Chat History */}
-        {username && (
-          <div style={{ width: '320px', borderLeft: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.01)', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ padding: '20px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Chat History</h3>
-              <button 
-                className="button-icon" 
-                style={{ padding: '4px 8px', fontSize: '0.8rem', color: '#ef4444' }}
-                onClick={() => {
-                  setUsername('');
-                  localStorage.removeItem('username');
-                  setUserSessions([]);
-                }}
-              >
-                Sign Out
-              </button>
-            </div>
-            <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {isSessionsLoading ? (
-                <div style={{ display: 'flex', justifyContent: 'center', padding: '20px' }}><Loader2 size={24} className="animate-spin text-muted" /></div>
-              ) : userSessions.length === 0 ? (
-                <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.9rem', textAlign: 'center', marginTop: '20px' }}>No saved sessions.</p>
-              ) : (
-                userSessions.map(session => (
-                  <div 
-                    key={session.id}
-                    style={{
-                      padding: '12px', background: session.id === sessionId ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.03)', 
-                      borderRadius: '8px', cursor: 'pointer',
-                      border: session.id === sessionId ? '1px solid var(--accent)' : '1px solid var(--border-color)', 
-                      transition: 'all 0.2s'
-                    }}
-                    onClick={() => loadChatHistory(session.id)}
-                    onMouseEnter={(e) => e.currentTarget.style.background = session.id === sessionId ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.08)'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = session.id === sessionId ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.03)'}
-                  >
-                    <div style={{ fontSize: '0.75rem', color: 'var(--accent)', marginBottom: '4px' }}>
-                      {new Date(session.created_at).toLocaleString()}
-                    </div>
-                    <div style={{ fontSize: '0.85rem', color: 'var(--text-main)', lineHeight: '1.4' }}>
-                      {session.preview || "Empty session"}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
+      ) : (
+        <div className="app-container-inner" style={{ display: 'flex', flex: 1, width: '100%', maxWidth: '1600px', margin: '0 auto' }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+            {renderHeader()}
+            {renderTabContent()}
           </div>
-        )}
-
-      </div>
-
-      {/* Case Explorer Modal */}
-      {isExplorerOpen && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0, 0, 0, 0.8)', backdropFilter: 'blur(8px)',
-          zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          padding: '20px'
-        }}>
-          <div className="glass-panel animate-fade-in explorer-modal" style={{
-            width: '100%', maxWidth: '1200px', height: '90vh', display: 'flex', flexDirection: 'column',
-            background: 'var(--panel-bg)', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 20px 40px rgba(0,0,0,0.5)'
-          }}>
-            <div style={{ padding: '24px 32px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <Book size={24} color="var(--accent)" />
-                <h2 style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-main)' }}>Case Explorer</h2>
-              </div>
-              <button className="button-icon" onClick={() => setIsExplorerOpen(false)}>
-                <X size={24} />
-              </button>
-            </div>
-            
-            <div style={{ padding: '24px 32px', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
-                <Search size={20} color="var(--text-muted)" style={{ position: 'absolute', marginLeft: '16px' }} />
-                <input 
-                  type="text" 
-                  value={explorerSearch}
-                  onChange={(e) => setExplorerSearch(e.target.value)}
-                  placeholder="Search case name..."
-                  className="input-glass"
-                  style={{ width: '100%', padding: '10px 16px 10px 44px', borderRadius: '8px' }}
-                />
-              </div>
-              
-              <FilterControls />
-            </div>
-
-            <div style={{ flex: 1, overflowY: 'auto', padding: '0' }}>
-              {isExplorerLoading ? (
-                <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
-                  <Loader2 className="spinner" size={32} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent)' }} />
-                </div>
-              ) : explorerCases.length === 0 ? (
-                <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                  No cases found. Try adjusting your filters.
-                </div>
-              ) : (
-                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                  <thead style={{ position: 'sticky', top: 0, background: 'var(--bg-main)', zIndex: 1 }}>
-                    <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
-                      <th style={{ padding: '16px 24px', color: 'var(--text-muted)', fontWeight: 500, fontSize: '0.9rem' }}>Case Name</th>
-                      <th style={{ padding: '16px 24px', color: 'var(--text-muted)', fontWeight: 500, fontSize: '0.9rem' }}>Year</th>
-                      <th style={{ padding: '16px 24px', color: 'var(--text-muted)', fontWeight: 500, fontSize: '0.9rem' }}>Court</th>
-                      <th style={{ padding: '16px 24px', color: 'var(--text-muted)', fontWeight: 500, fontSize: '0.9rem' }}>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {explorerCases.map(c => (
-                      <tr 
-                        key={c.case_id} 
-                        onClick={() => fetchFullCase(c.case_id)}
-                        style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', cursor: 'pointer', transition: 'background 0.2s ease' }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                      >
-                        <td style={{ padding: '16px 24px', color: 'var(--accent)', fontWeight: 500 }}>{c.name}</td>
-                        <td style={{ padding: '16px 24px' }}>{c.year}</td>
-                        <td style={{ padding: '16px 24px' }}>
-                          <div style={{ fontSize: '0.95rem' }}>{c.court}</div>
-                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{c.jurisdiction}</div>
-                        </td>
-                        <td style={{ padding: '16px 24px' }}>
-                          {c.status === 'good_law' ? (
-                            <span style={{ color: '#51cf66', background: 'rgba(81, 207, 102, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem' }}>Good Law</span>
-                          ) : c.status === 'overruled' ? (
-                            <span style={{ color: '#ff6b6b', background: 'rgba(255, 107, 107, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem' }}>Overruled</span>
-                          ) : (
-                            <span style={{ color: '#fcc419', background: 'rgba(252, 196, 25, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem' }}>Caution</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
+          {username && renderRightSidebar()}
         </div>
       )}
-      
-      {/* Full Case Modal */}
-      {(selectedCase || isCaseLoading) && (
+
+      {/* Full Case Modal Overlay (when not in Split Screen mode) */}
+      {!isSplitScreen && (selectedCase || isCaseLoading) && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
           background: 'rgba(0, 0, 0, 0.7)', backdropFilter: 'blur(4px)',
           zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center',
           padding: '40px'
         }}>
-          {(() => {
-            let parsed = null;
-            if (selectedCase && selectedCase.full_text) {
-              try {
-                let rawText = selectedCase.full_text;
-                // Clean up unescaped control characters from postgres json dumps
-                rawText = rawText.replace(/[\u0000-\u001F]+/g, (match) => {
-                  return match.split('').map(char => {
-                    if (char === '\n') return '\\n';
-                    if (char === '\r') return '\\r';
-                    if (char === '\t') return '\\t';
-                    if (char === '\f') return '\\f';
-                    return '';
-                  }).join('');
-                });
-                parsed = JSON.parse(rawText);
-              } catch (e) {
-                // Fallback if not JSON
-              }
-            }
-
-            return (
-              <div className="glass-panel animate-fade-in" style={{
-                width: '100%', maxWidth: '900px', maxHeight: '100%', display: 'flex', flexDirection: 'column',
-                background: 'var(--panel-bg)', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 20px 40px rgba(0,0,0,0.5)'
-              }}>
-                <div style={{ padding: '24px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <h2 style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-main)' }}>
-                      {isCaseLoading ? 'Loading Document...' : (parsed && parsed.case_name_full ? parsed.case_name_full : selectedCase.name)}
-                    </h2>
-                    {selectedCase && (
-                      <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                        {selectedCase.reporter} • {selectedCase.court} • {selectedCase.year}
-                      </div>
-                    )}
-                  </div>
-                  <button className="button-icon" onClick={() => setSelectedCase(null) || setIsCaseLoading(false)}>
-                    <X size={24} />
-                  </button>
-                </div>
-                
-                <div style={{ flex: 1, overflowY: 'auto', padding: '32px', fontSize: '1rem', lineHeight: '1.8', color: 'var(--text-main)' }}>
-                  {isCaseLoading ? (
-                    <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
-                      <Loader2 className="spinner" size={32} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent)' }} />
-                    </div>
-                  ) : (
-                    <div className="markdown-body" style={{ overflowWrap: 'anywhere' }}>
-                      {parsed ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                          <div style={{ background: 'rgba(255,255,255,0.02)', padding: '24px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                            <h3 style={{ marginTop: 0, color: 'var(--accent)', fontSize: '1.1rem' }}>Metadata</h3>
-                            <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '12px 16px', fontSize: '0.95rem' }}>
-                              {parsed.case_name_full && <><span style={{ color: 'var(--text-muted)' }}>Case Name:</span><span>{parsed.case_name_full}</span></>}
-                              {parsed.date_filed && <><span style={{ color: 'var(--text-muted)' }}>Date Filed:</span><span>{parsed.date_filed}</span></>}
-                              {parsed.court_full_name && <><span style={{ color: 'var(--text-muted)' }}>Court:</span><span>{parsed.court_full_name}</span></>}
-                              {parsed.judges && <><span style={{ color: 'var(--text-muted)' }}>Judges:</span><span>{parsed.judges}</span></>}
-                              {parsed.attorneys && <><span style={{ color: 'var(--text-muted)' }}>Attorneys:</span><span>{parsed.attorneys}</span></>}
-                              {parsed.citations && parsed.citations.length > 0 && <><span style={{ color: 'var(--text-muted)' }}>Citations:</span><span>{parsed.citations.join(', ')}</span></>}
-                            </div>
-                          </div>
-                          
-                          {parsed.summary && (
-                            <div>
-                              <h3 style={{ color: 'var(--accent)' }}>Summary</h3>
-                              <ReactMarkdown>{parsed.summary}</ReactMarkdown>
-                            </div>
-                          )}
-                          
-                          {parsed.syllabus && (
-                            <div>
-                              <h3 style={{ color: 'var(--accent)' }}>Syllabus</h3>
-                              <ReactMarkdown>{parsed.syllabus}</ReactMarkdown>
-                            </div>
-                          )}
-
-                          {parsed.headnotes && (
-                            <div>
-                              <h3 style={{ color: 'var(--accent)' }}>Headnotes</h3>
-                              <ReactMarkdown>{parsed.headnotes}</ReactMarkdown>
-                            </div>
-                          )}
-
-                          {parsed.headmatter && (
-                            <div>
-                              <h3 style={{ color: 'var(--accent)' }}>Headmatter</h3>
-                              <ReactMarkdown>{parsed.headmatter}</ReactMarkdown>
-                            </div>
-                          )}
-                          
-                          {parsed.opinions && parsed.opinions.length > 0 ? (
-                            <div>
-                              <h3 style={{ color: 'var(--accent)' }}>Opinions</h3>
-                              {parsed.opinions.map((o, idx) => (
-                                <div key={idx} style={{ marginTop: '16px' }}>
-                                  {o.author_str && <h4 style={{ color: 'var(--text-muted)' }}>Author: {o.author_str}</h4>}
-                                  
-                                  {o.download_url && (
-                                    <div style={{ marginBottom: '16px' }}>
-                                      <a 
-                                        href={o.download_url} 
-                                        target="_blank" 
-                                        rel="noreferrer" 
-                                        style={{ 
-                                          display: 'inline-flex', alignItems: 'center', gap: '8px', 
-                                          color: 'var(--bg-main)', background: 'var(--accent)', 
-                                          textDecoration: 'none', fontWeight: 600, padding: '8px 16px', 
-                                          borderRadius: '8px', fontSize: '0.9rem' 
-                                        }}
-                                      >
-                                        Download PDF
-                                      </a>
-                                    </div>
-                                  )}
-                                  
-                                  <ReactMarkdown>{o.opinion_text}</ReactMarkdown>
-                                  {idx < parsed.opinions.length - 1 && <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '32px 0' }}/>}
-                                </div>
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <ReactMarkdown>{selectedCase.full_text}</ReactMarkdown>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })()}
+          <div className="glass-panel animate-fade-in" style={{
+            width: '100%', maxWidth: '900px', maxHeight: '90vh', display: 'flex', flexDirection: 'column',
+            background: 'var(--panel-bg)', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 20px 40px rgba(0,0,0,0.5)'
+          }}>
+            {renderCaseReader(selectedCase, isCaseLoading, false)}
+          </div>
         </div>
       )}
 
@@ -923,6 +1454,7 @@ function App() {
         @keyframes spin { 100% { transform: rotate(360deg); } }
         .hover-pill:hover { background: rgba(255,255,255,0.1) !important; color: white !important; transform: translateY(-1px); }
       `}</style>
+
       {/* Profile & History Modal */}
       {isLoginModalOpen && (
         <div style={{
@@ -985,7 +1517,6 @@ function App() {
           </div>
         </div>
       )}
-
     </div>
   );
 }

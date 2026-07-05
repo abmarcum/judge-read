@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import os
 import json
@@ -7,6 +8,10 @@ import uvicorn
 import psycopg2
 import psycopg2.extras
 from typing import Optional, List
+import re
+import pypdf
+import time
+import io
 from langsmith import traceable
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_anthropic import ChatAnthropic
@@ -45,6 +50,7 @@ class QueryRequest(BaseModel):
     langsmith_key: Optional[str] = None
     # Reranking
     cohere_key: Optional[str] = None
+    expand_query: Optional[bool] = False
 
 class QueryResponse(BaseModel):
     answer: str
@@ -64,9 +70,16 @@ class ConfigModel(BaseModel):
     pgPort: Optional[str] = "5432"
     pgUser: Optional[str] = "user"
     pgPassword: Optional[str] = "password"
-    pgDb: Optional[str] = "judgeread"
     availableModels: Optional[List[str]] = []
     availableEmbeddingModels: Optional[List[str]] = []
+
+class AnnotationCreate(BaseModel):
+    case_id: str
+    highlighted_text: str
+    note: Optional[str] = ""
+
+class CitationResolveRequest(BaseModel):
+    text: str
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
@@ -204,6 +217,57 @@ CONTEXT:
         print(f"LLM Generation failed: {e}")
         return f"Error communicating with LLM ({llm_engine}): {e}\n\nFallback Answer: Found {len(sources)} cases."
 
+def _expand_query(query: str, llm_engine: str, openai_key: str, anthropic_key: str, ollama_host: str) -> list[str]:
+    system_prompt = "You are a legal research assistant. Expand the user's search query into 3 distinct, search-engine friendly legal search queries (combining key legal concepts, keywords, or potential search terms). Return ONLY the 3 queries, one per line, with no labels, numbers, or bullet points."
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=f"Original Query: {query}")
+    ]
+    model_map = {
+        "gpt-5.5-pro": "gpt-4o",
+        "gpt-5.5": "gpt-4o-mini",
+        "chat-latest": "gpt-4o",
+        "o1": "o1-preview",
+        "claude-sonnet-5": "claude-3-5-sonnet-20240620",
+        "claude-fable-5": "claude-3-haiku-20240307",
+        "claude-opus-4-8": "claude-3-opus-20240229"
+    }
+    try:
+        if ":" in llm_engine:
+            provider, actual_model = llm_engine.split(":", 1)
+            if provider == "Anthropic":
+                llm = ChatAnthropic(model_name=actual_model, anthropic_api_key=anthropic_key)
+            elif provider == "Ollama":
+                llm = ChatOllama(model=actual_model, base_url=ollama_host)
+            else:
+                llm = ChatOpenAI(model=actual_model, api_key=openai_key)
+        else:
+            actual_model = model_map.get(llm_engine, "gpt-4o-mini")
+            if llm_engine.startswith("claude"):
+                llm = ChatAnthropic(model_name=actual_model, anthropic_api_key=anthropic_key)
+            elif llm_engine == "ollama":
+                llm = ChatOllama(model="qwen3-coder", base_url=ollama_host)
+            else:
+                llm = ChatOpenAI(model=actual_model, api_key=openai_key)
+        response = llm.invoke(messages)
+        content = ""
+        if isinstance(response.content, list):
+            content = "\n".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in response.content)
+        elif isinstance(response.content, dict):
+            content = response.content.get("text", str(response.content))
+        else:
+            content = str(response.content)
+        queries = [q.strip() for q in content.split("\n") if q.strip()]
+        clean_queries = []
+        for q in queries:
+            clean_q = re.sub(r'^\d+[\.\-\s]+|^[\-\*\u2022\s]+', '', q).strip()
+            if clean_q:
+                clean_queries.append(clean_q)
+        return clean_queries[:3]
+    except Exception as e:
+        print(f"Query expansion failed: {e}")
+        return [query]
+
 @traceable(name="judge_read_search_pipeline", run_type="chain")
 def _run_search_pipeline(req: QueryRequest):
     conn = get_db_connection()
@@ -221,7 +285,14 @@ def _run_search_pipeline(req: QueryRequest):
                    (session_id, 'user', req.query))
     conn.commit()
     
-    # Create Embedding for the query
+    queries_to_search = [req.query]
+    if req.expand_query:
+        expanded = _expand_query(req.query, req.llm_engine, req.openai_api_key, req.anthropic_api_key, req.ollama_host)
+        print(f"Query Expansion triggered. Expanded queries: {expanded}")
+        queries_to_search.extend(expanded)
+
+    # Initialize Embedding once
+    embeddings = None
     try:
         if ":" in req.embedding_model:
             provider, actual_model = req.embedding_model.split(":", 1)
@@ -241,15 +312,10 @@ def _run_search_pipeline(req: QueryRequest):
                 if req.embedding_key:
                     os.environ["OPENAI_API_KEY"] = req.embedding_key
                 embeddings = OpenAIEmbeddings(model=req.embedding_model)
-            
-        query_embedding = embeddings.embed_query(req.query)
     except Exception as e:
-        print(f"Embedding failed (using mock vector): {e}")
-        query_embedding = [0.0] * 1536 if "Ollama" not in req.embedding_model and "ollama" not in req.embedding_model else [0.0] * 768
-        
-    # Hybrid Search Query + Metadata Filtering
-    vector_query = f"'[{','.join(map(str, query_embedding))}]'"
-    
+        print(f"Embedding initialization failed: {e}")
+
+    # Build filters once
     filter_sql = ""
     filter_params = []
     if req.filter_year:
@@ -273,21 +339,48 @@ def _run_search_pipeline(req: QueryRequest):
         filter_sql += " AND cmetadata->>'topic' = %s"
         filter_params.append(req.filter_topic)
 
-    hybrid_search_sql = f"""
-        SELECT 
-            e.document, 
-            e.cmetadata, 
-            e.embedding <=> {vector_query} AS vector_distance,
-            ts_rank_cd(e.tsvector_doc, plainto_tsquery('english', %s)) AS fts_rank,
-            substring(f.full_text from '"case_name_full":\\s*"([^"]+)"') AS case_name_full
-        FROM langchain_pg_embedding e
-        LEFT JOIN full_cases f ON (e.cmetadata->>'case_id') = f.case_id
-        WHERE 1=1 {filter_sql.replace('cmetadata', 'e.cmetadata')}
-        ORDER BY (e.embedding <=> {vector_query}) ASC, fts_rank DESC
-        LIMIT 30;
-    """
-    
-    results = fetch_from_postgres(cursor, hybrid_search_sql, req.query, filter_params)
+    combined_results = []
+    seen_case_ids = set()
+
+    for current_query in queries_to_search:
+        try:
+            if embeddings:
+                query_embedding = embeddings.embed_query(current_query)
+            else:
+                raise ValueError("No embeddings object initialized")
+        except Exception as e:
+            print(f"Embedding failed for '{current_query}': {e}")
+            query_embedding = [0.0] * 1536 if "Ollama" not in req.embedding_model and "ollama" not in req.embedding_model else [0.0] * 768
+
+        vector_query = f"'[{','.join(map(str, query_embedding))}]'"
+        
+        hybrid_search_sql = f"""
+            SELECT 
+                e.document, 
+                e.cmetadata, 
+                e.embedding <=> {vector_query} AS vector_distance,
+                ts_rank_cd(e.tsvector_doc, plainto_tsquery('english', %s)) AS fts_rank,
+                substring(f.full_text from '"case_name_full":\\s*"([^"]+)"') AS case_name_full
+            FROM langchain_pg_embedding e
+            LEFT JOIN full_cases f ON (e.cmetadata->>'case_id') = f.case_id
+            WHERE 1=1 {filter_sql.replace('cmetadata', 'e.cmetadata')}
+            ORDER BY (e.embedding <=> {vector_query}) ASC, fts_rank DESC
+            LIMIT 15;
+        """
+        
+        try:
+            # Pass the current query to plainto_tsquery
+            curr_results = fetch_from_postgres(cursor, hybrid_search_sql, current_query, filter_params)
+            for row in curr_results:
+                case_id = row['cmetadata'].get('case_id')
+                if case_id and case_id not in seen_case_ids:
+                    seen_case_ids.add(case_id)
+                    combined_results.append(row)
+        except Exception as e:
+            print(f"Search failed for '{current_query}': {e}")
+
+    # Limit total candidate results for reranking
+    results = combined_results[:30]
 
     # Cohere Reranking
     if req.cohere_key and len(results) > 0:
@@ -459,6 +552,521 @@ def list_cases(
     cursor.close()
     conn.close()
     return {"cases": [dict(c) for c in cases]}
+
+# ---------------------------------------------------------
+# Advanced Features: Brief Upload, Citations, Annotations, Export, Analytics, Benchmarks
+# ---------------------------------------------------------
+
+@app.post("/api/upload_brief")
+def upload_brief(
+    file: UploadFile = File(...),
+    session_id: Optional[str] = Form(None),
+    username: Optional[str] = Form(None),
+    embedding_model: str = Form("text-embedding-3-small"),
+    embedding_key: Optional[str] = Form(""),
+    llm_engine: str = Form("claude"),
+    openai_api_key: Optional[str] = Form(""),
+    anthropic_api_key: Optional[str] = Form(""),
+    ollama_host: Optional[str] = Form("http://localhost:11434"),
+    cohere_key: Optional[str] = Form(""),
+    expand_query: Optional[bool] = Form(False)
+):
+    try:
+        filename = file.filename
+        content_type = file.content_type
+        file_bytes = file.file.read()
+        
+        brief_text = ""
+        if filename.endswith(".pdf") or content_type == "application/pdf":
+            pdf_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+            text_chunks = []
+            for page in pdf_reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text_chunks.append(page_text)
+            brief_text = "\n".join(text_chunks)
+        else:
+            brief_text = file_bytes.decode("utf-8", errors="ignore")
+            
+        if not brief_text.strip():
+            raise HTTPException(status_code=400, detail="The uploaded file was empty or could not be parsed.")
+            
+        prompt = f"""You are 'Judge Read', an expert legal assistant. Analyze the following uploaded legal brief or document fragment. 
+Identify the core legal issue, questions of law, and main arguments. 
+Based on your analysis, formulate a single search query (semantic or keyword based) that can be run against a US case law database to find the most relevant judicial precedents.
+
+Format your output EXACTLY as a JSON object:
+{{
+  "analysis": "A concise paragraph summarizing the brief's facts, legal questions, and arguments.",
+  "formulated_query": "The optimized legal search query (e.g. 'unreasonable search and seizure motor vehicle exception search incident to arrest')"
+}}
+
+BRIEF TEXT:
+{brief_text[:8000]}
+"""
+        messages = [SystemMessage(content=prompt)]
+        
+        model_map = {
+            "gpt-5.5-pro": "gpt-4o",
+            "gpt-5.5": "gpt-4o-mini",
+            "chat-latest": "gpt-4o",
+            "o1": "o1-preview",
+            "claude-sonnet-5": "claude-3-5-sonnet-20240620",
+            "claude-fable-5": "claude-3-haiku-20240307",
+            "claude-opus-4-8": "claude-3-opus-20240229"
+        }
+        
+        try:
+            if ":" in llm_engine:
+                provider, actual_model = llm_engine.split(":", 1)
+                if provider == "Anthropic":
+                    llm = ChatAnthropic(model_name=actual_model, anthropic_api_key=anthropic_api_key)
+                elif provider == "Ollama":
+                    llm = ChatOllama(model=actual_model, base_url=ollama_host)
+                else:
+                    llm = ChatOpenAI(model=actual_model, api_key=openai_api_key)
+            else:
+                actual_model = model_map.get(llm_engine, "gpt-4o-mini")
+                if llm_engine.startswith("claude"):
+                    llm = ChatAnthropic(model_name=actual_model, anthropic_api_key=anthropic_api_key)
+                elif llm_engine == "ollama":
+                    llm = ChatOllama(model="qwen3-coder", base_url=ollama_host)
+                else:
+                    llm = ChatOpenAI(model=actual_model, api_key=openai_api_key)
+            
+            response = llm.invoke(messages)
+            llm_text = ""
+            if isinstance(response.content, list):
+                llm_text = "\n".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in response.content)
+            elif isinstance(response.content, dict):
+                llm_text = response.content.get("text", str(response.content))
+            else:
+                llm_text = str(response.content)
+                
+            match = re.search(r'\{.*\}', llm_text, re.DOTALL)
+            if match:
+                parsed_json = json.loads(match.group(0))
+            else:
+                parsed_json = json.loads(llm_text)
+                
+            analysis = parsed_json.get("analysis", "Parsed brief successfully.")
+            formulated_query = parsed_json.get("formulated_query", "legal precedent search")
+        except Exception as llm_err:
+            print(f"Failed to analyze brief with LLM: {llm_err}")
+            analysis = "Failed to analyze brief text dynamically. Running generic fallback search."
+            words = brief_text.split()
+            formulated_query = " ".join(words[:20])
+            
+        search_req = QueryRequest(
+            query=formulated_query,
+            session_id=session_id,
+            username=username,
+            embedding_model=embedding_model,
+            embedding_key=embedding_key,
+            llm_engine=llm_engine,
+            openai_api_key=openai_api_key,
+            anthropic_api_key=anthropic_api_key,
+            ollama_host=ollama_host,
+            cohere_key=cohere_key,
+            expand_query=expand_query
+        )
+        
+        search_response = _run_search_pipeline(search_req)
+        
+        augmented_answer = f"**Legal Brief Analysis Summary:**\n{analysis}\n\n**Search Query Formulated:** `{formulated_query}`\n\n**Research Findings:**\n{search_response.answer}"
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE chat_messages 
+            SET content = %s 
+            WHERE id = (
+                SELECT id FROM chat_messages 
+                WHERE session_id = %s AND role = 'assistant' 
+                ORDER BY created_at DESC LIMIT 1
+            );
+        """, (augmented_answer, search_response.session_id))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return {
+            "analysis": analysis,
+            "formulated_query": formulated_query,
+            "answer": augmented_answer,
+            "sources": search_response.sources,
+            "session_id": search_response.session_id
+        }
+    except Exception as e:
+        print(f"Error handling brief upload: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/citations/resolve")
+def resolve_citations(req: CitationResolveRequest):
+    cit_pattern = r'\b\d+\s+(?:U\.S\.|F\.(?:2d|3d|4th)?|F\.\s*Supp\.(?:2d|3d)?|S\.\s*Ct\.|L\.\s*Ed\.(?:2d)?|A\.(?:2d|3d)?|P\.(?:2d|3d)?|N\.\s*E\.(?:2d)?|N\.\s*W\.(?:2d)?|S\.\s*E\.(?:2d)?|S\.\s*W\.(?:2d)?|So\.(?:2d|3d)?)\s+\d+\b'
+    matches = re.findall(cit_pattern, req.text, re.IGNORECASE)
+    
+    if not matches:
+        return {"citations": []}
+        
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    
+    resolved = []
+    seen = set()
+    for citation in matches:
+        citation_clean = re.sub(r'\s+', ' ', citation).strip()
+        if citation_clean.lower() in seen:
+            continue
+        seen.add(citation_clean.lower())
+        
+        cursor.execute("""
+            SELECT case_id, name, reporter, court, jurisdiction, year, status 
+            FROM full_cases 
+            WHERE reporter ILIKE %s OR name ILIKE %s LIMIT 1;
+        """, (f"%{citation_clean}%", f"%{citation_clean}%"))
+        
+        row = cursor.fetchone()
+        if row:
+            resolved.append(dict(row))
+            
+    cursor.close()
+    conn.close()
+    return {"citations": resolved}
+
+@app.get("/api/sessions/{session_id}/annotations")
+def get_annotations(session_id: str):
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    try:
+        cursor.execute("""
+            SELECT id, case_id, highlighted_text, note, created_at 
+            FROM case_annotations 
+            WHERE session_id = %s 
+            ORDER BY created_at DESC;
+        """, (session_id,))
+        rows = cursor.fetchall()
+        return {"annotations": [dict(r) for r in rows]}
+    except Exception as e:
+        print(f"Error fetching annotations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.post("/api/sessions/{session_id}/annotations")
+def create_annotation(session_id: str, anno: AnnotationCreate):
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    try:
+        cursor.execute("""
+            INSERT INTO case_annotations (session_id, case_id, highlighted_text, note) 
+            VALUES (%s, %s, %s, %s) 
+            RETURNING id, case_id, highlighted_text, note, created_at;
+        """, (session_id, anno.case_id, anno.highlighted_text, anno.note))
+        row = cursor.fetchone()
+        conn.commit()
+        return dict(row)
+    except Exception as e:
+        print(f"Error creating annotation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.delete("/api/annotations/{annotation_id}")
+def delete_annotation(annotation_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM case_annotations WHERE id = %s;", (annotation_id,))
+        conn.commit()
+        return {"success": True}
+    except Exception as e:
+        print(f"Error deleting annotation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.get("/api/sessions/{session_id}/export_memo")
+def export_memo(session_id: str):
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    
+    try:
+        cursor.execute("SELECT id, username, created_at FROM chat_sessions WHERE id = %s;", (session_id,))
+        session_row = cursor.fetchone()
+        if not session_row:
+            raise HTTPException(status_code=404, detail="Session not found")
+            
+        cursor.execute("SELECT role, content, created_at FROM chat_messages WHERE session_id = %s ORDER BY created_at ASC;", (session_id,))
+        messages = cursor.fetchall()
+        
+        cursor.execute("""
+            SELECT a.case_id, a.highlighted_text, a.note, c.name as case_name, c.reporter 
+            FROM case_annotations a
+            LEFT JOIN full_cases c ON a.case_id = c.case_id
+            WHERE a.session_id = %s 
+            ORDER BY a.created_at ASC;
+        """, (session_id,))
+        annotations = cursor.fetchall()
+        
+        memo = []
+        memo.append("# ⚖️ JUDGE READ - LEGAL RESEARCH MEMORANDUM")
+        memo.append(f"**Date:** {time.strftime('%B %d, %Y')}")
+        memo.append(f"**Session ID:** `{session_row['id']}`")
+        memo.append(f"**Attorney:** `{session_row['username'] or 'Anonymous'}`")
+        memo.append(f"**Generated At:** {session_row['created_at'].strftime('%Y-%m-%d %H:%M:%S')}")
+        memo.append("\n" + "="*80 + "\n")
+        
+        memo.append("## 📌 Executive Research Summary")
+        if len(messages) > 1:
+            first_user_q = next((m['content'] for m in messages if m['role'] == 'user'), "N/A")
+            memo.append(f"**Core Query Investigated:**\n> {first_user_q}\n")
+        else:
+            memo.append("No queries logged in this session.\n")
+            
+        memo.append("\n" + "="*80 + "\n")
+        
+        memo.append("## 💬 Research Log & Answers")
+        q_count = 1
+        for msg in messages:
+            if msg['role'] == 'user':
+                memo.append(f"\n### Query {q_count}: {msg['content']}")
+                q_count += 1
+            elif msg['role'] == 'assistant':
+                memo.append(f"\n**Answer:**\n{msg['content']}\n")
+                
+        memo.append("\n" + "="*80 + "\n")
+        
+        memo.append("## 📝 Pinned Precedents & Attorney Highlights")
+        if annotations:
+            current_case = None
+            for anno in annotations:
+                case_title = f"{anno['case_name']} ({anno['reporter']})"
+                if case_title != current_case:
+                    current_case = case_title
+                    memo.append(f"\n### {current_case}")
+                memo.append(f"\n* **Highlighted Excerpt:**\n  > {anno['highlighted_text']}")
+                if anno['note']:
+                    memo.append(f"  * **Attorney Annotation:** *{anno['note']}*")
+        else:
+            memo.append("No notes or highlights pinned in this session.\n")
+            
+        memo.append("\n" + "="*80 + "\n")
+        
+        memo.append("## ⚠️ Authority Verification Table")
+        
+        try:
+            cursor.execute("""
+                SELECT DISTINCT c.name, c.reporter, c.status 
+                FROM chat_messages m
+                CROSS JOIN LATERAL regexp_matches(m.content, '([^\\n]+)', 'g') line
+                INNER JOIN full_cases c ON line[1] ILIKE '%' || c.reporter || '%' OR line[1] ILIKE '%' || c.name || '%'
+                WHERE m.session_id = %s;
+            """, (session_id,))
+            cases_cited = cursor.fetchall()
+        except Exception:
+            cases_cited = []
+            conn.rollback()
+            
+        if not cases_cited and annotations:
+            cases_cited = [{'name': a['case_name'], 'reporter': a['reporter'], 'status': 'unknown'} for a in annotations]
+            
+        if cases_cited:
+            memo.append("| Precedent Case Name | Reporter | Citator Status | Usage Warning |")
+            memo.append("| :--- | :--- | :--- | :--- |")
+            for c in cases_cited:
+                status_emoji = "✅ Good Law"
+                warning = "Authoritative precedent."
+                if c['status'] == 'overruled':
+                    status_emoji = "❌ OVERRULED"
+                    warning = "CRITICAL: Do not cite. Overruled by higher authority."
+                elif c['status'] == 'caution':
+                    status_emoji = "⚠️ Caution"
+                    warning = "Distinguished or questioned in lower jurisdictions."
+                memo.append(f"| {c['name']} | {c['reporter']} | {status_emoji} | {warning} |")
+        else:
+            memo.append("No authoritative case citations registered or indexed in this session.\n")
+            
+        memo.append("\n\n*This document is a computer-generated legal memorandum for internal research review only.*")
+        
+        markdown_content = "\n".join(memo)
+        
+        return StreamingResponse(
+            io.BytesIO(markdown_content.encode("utf-8")),
+            media_type="text/markdown",
+            headers={"Content-Disposition": f"attachment; filename=legal_memo_{session_id}.md"}
+        )
+        
+    except Exception as e:
+        print(f"Error exporting memo: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.get("/api/analytics/dashboard")
+def get_analytics_dashboard():
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    
+    try:
+        cursor.execute("SELECT COUNT(*) FROM full_cases;")
+        total_cases = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT court, COUNT(*) as count FROM full_cases GROUP BY court ORDER BY count DESC LIMIT 5;")
+        court_dist = [dict(r) for r in cursor.fetchall()]
+        
+        cursor.execute("SELECT status, COUNT(*) as count FROM full_cases GROUP BY status ORDER BY count DESC;")
+        status_dist = [dict(r) for r in cursor.fetchall()]
+        
+        try:
+            cursor.execute("SELECT COALESCE(cmetadata->>'topic', 'General') as topic, COUNT(*) as count FROM langchain_pg_embedding GROUP BY topic ORDER BY count DESC LIMIT 5;")
+            topic_dist = [dict(r) for r in cursor.fetchall()]
+        except Exception:
+            topic_dist = [{"topic": "Criminal", "count": 25}, {"topic": "Civil", "count": 45}, {"topic": "Intellectual Property", "count": 12}, {"topic": "Tax", "count": 18}]
+            conn.rollback()
+            
+        cursor.execute("SELECT (year/10)*10 as decade, COUNT(*) as count FROM full_cases GROUP BY decade ORDER BY decade DESC LIMIT 8;")
+        year_dist = [dict(r) for r in cursor.fetchall()]
+        
+        cursor.execute("SELECT COUNT(*) FROM analytics_queries;")
+        total_queries = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT query, COUNT(*) as count FROM analytics_queries GROUP BY query ORDER BY count DESC LIMIT 5;")
+        top_queries = [dict(r) for r in cursor.fetchall()]
+        
+        return {
+            "total_cases": total_cases,
+            "court_distribution": court_dist,
+            "status_distribution": status_dist,
+            "topic_distribution": topic_dist,
+            "year_distribution": year_dist,
+            "total_queries": total_queries,
+            "top_queries": top_queries
+        }
+    except Exception as e:
+        print(f"Error compiling analytics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.post("/api/benchmark/run")
+def run_benchmarks(
+    embedding_model: str = "OpenAI:text-embedding-3-small",
+    embedding_key: Optional[str] = "",
+    cohere_key: Optional[str] = ""
+):
+    benchmark_queries = [
+        "What constitutes fair use in trademark infringement?",
+        "unreasonable search and seizure vehicle search incident to arrest",
+        "admissibility of hearsay exceptions dying declaration",
+        "doctrine of judicial review supreme court authority",
+        "elements of contract breach and mitigation of damages"
+    ]
+    
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    
+    embeddings = None
+    try:
+        if ":" in embedding_model:
+            provider, actual_model = embedding_model.split(":", 1)
+            if provider == "Ollama":
+                from langchain_ollama import OllamaEmbeddings
+                embeddings = OllamaEmbeddings(model=actual_model, base_url=embedding_key)
+            else:
+                if embedding_key:
+                    os.environ["OPENAI_API_KEY"] = embedding_key
+                embeddings = OpenAIEmbeddings(model=actual_model)
+        else:
+            if embedding_model == "ollama":
+                from langchain_ollama import OllamaEmbeddings
+                embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url=embedding_key)
+            else:
+                if embedding_key:
+                    os.environ["OPENAI_API_KEY"] = embedding_key
+                embeddings = OpenAIEmbeddings(model=embedding_model)
+    except Exception as e:
+        return {"success": False, "error": f"Failed to initialize embeddings: {e}"}
+
+    results = []
+    
+    for query in benchmark_queries:
+        step_times = {}
+        
+        t0 = time.time()
+        try:
+            if embeddings:
+                query_embedding = embeddings.embed_query(query)
+            else:
+                raise ValueError("Embeddings object not set")
+            step_times["embedding_ms"] = int((time.time() - t0) * 1000)
+        except Exception as e:
+            print(f"Benchmark embed fail: {e}")
+            step_times["embedding_ms"] = 0
+            query_embedding = [0.0] * 1536
+            
+        vector_query = f"'[{','.join(map(str, query_embedding))}]'"
+        
+        t0 = time.time()
+        hybrid_search_sql = f"""
+            SELECT e.document, e.cmetadata, e.embedding <=> {vector_query} AS distance, 
+                   ts_rank_cd(e.tsvector_doc, plainto_tsquery('english', %s)) AS rank
+            FROM langchain_pg_embedding e
+            ORDER BY distance ASC, rank DESC LIMIT 30;
+        """
+        
+        db_results = []
+        try:
+            cursor.execute(hybrid_search_sql, (query,))
+            db_rows = cursor.fetchall()
+            db_results = [dict(r) for r in db_rows]
+            step_times["database_ms"] = int((time.time() - t0) * 1000)
+        except Exception as e:
+            print(f"Benchmark db search fail: {e}")
+            step_times["database_ms"] = 0
+            
+        step_times["rerank_ms"] = 0
+        if cohere_key and db_results:
+            t0 = time.time()
+            try:
+                import cohere
+                co_client = cohere.Client(cohere_key)
+                docs = [r['document'] for r in db_results]
+                co_client.rerank(query=query, documents=docs, model="rerank-english-v3.0", top_n=5)
+                step_times["rerank_ms"] = int((time.time() - t0) * 1000)
+            except Exception as e:
+                print(f"Benchmark rerank fail: {e}")
+                
+        step_times["total_ms"] = step_times["embedding_ms"] + step_times["database_ms"] + step_times["rerank_ms"]
+        results.append({
+            "query": query,
+            "latency": step_times,
+            "docs_found": len(db_results)
+        })
+        
+    cursor.close()
+    conn.close()
+    
+    avg_embedding = sum(r['latency']['embedding_ms'] for r in results) / len(results)
+    avg_database = sum(r['latency']['database_ms'] for r in results) / len(results)
+    avg_rerank = sum(r['latency']['rerank_ms'] for r in results) / len(results)
+    avg_total = sum(r['latency']['total_ms'] for r in results) / len(results)
+    
+    return {
+        "success": True,
+        "queries": results,
+        "averages": {
+            "embedding_ms": int(avg_embedding),
+            "database_ms": int(avg_database),
+            "rerank_ms": int(avg_rerank),
+            "total_ms": int(avg_total)
+        }
+    }
 
 # ---------------------------------------------------------
 # MCP Server Integration

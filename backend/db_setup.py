@@ -67,6 +67,18 @@ def setup_db():
         );
     """)
 
+    print("Creating case_annotations table for user notes and highlights...")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS case_annotations (
+            id SERIAL PRIMARY KEY,
+            session_id UUID REFERENCES chat_sessions(id) ON DELETE CASCADE,
+            case_id VARCHAR(255),
+            highlighted_text TEXT NOT NULL,
+            note TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
     print("Creating full_cases table...")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS full_cases (
