@@ -83,7 +83,7 @@ def setup_db():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS full_cases (
             case_id VARCHAR(255) PRIMARY KEY,
-            name VARCHAR(500),
+            name TEXT,
             reporter VARCHAR(255),
             court VARCHAR(255),
             jurisdiction VARCHAR(255),
