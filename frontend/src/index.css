@@ -3,9 +3,9 @@
   --panel-bg: rgba(20, 25, 35, 0.6);
   --text-main: #f0f4f8;
   --text-muted: #8b9bb4;
-  --accent: #3b82f6;
-  --accent-glow: rgba(59, 130, 246, 0.4);
-  --accent-hover: #60a5fa;
+  --accent: #ef4444;
+  --accent-glow: rgba(239, 68, 68, 0.4);
+  --accent-hover: #f87171;
   --border-color: rgba(255, 255, 255, 0.08);
 }
 
@@ -20,7 +20,7 @@ body {
   background-color: var(--bg-color);
   color: var(--text-main);
   background-image: 
-    radial-gradient(circle at 15% 50%, rgba(59, 130, 246, 0.08), transparent 25%),
+    radial-gradient(circle at 15% 50%, rgba(239, 68, 68, 0.08), transparent 25%),
     radial-gradient(circle at 85% 30%, rgba(139, 92, 246, 0.08), transparent 25%);
   min-height: 100vh;
   overflow-x: hidden;
@@ -206,8 +206,8 @@ select.input-glass option {
 
 .tab-button.active {
   color: var(--accent-hover);
-  background: rgba(59, 130, 246, 0.1);
-  border-color: rgba(59, 130, 246, 0.2);
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.2);
 }
 
 /* Split Screen Layout */
@@ -241,8 +241,8 @@ select.input-glass option {
 }
 
 .file-chip {
-  background: rgba(59, 130, 246, 0.15);
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
   border-radius: 8px;
   padding: 6px 12px;
   font-size: 0.85rem;
