@@ -99,7 +99,7 @@ def extract_text_from_html(file_content):
     return soup.get_text(separator="\n", strip=True)
 
 @traceable(name="embed_data_pipeline", run_type="chain")
-def embed_data(db_url, embed_provider, embed_model, embed_key, embed_host):
+def embed_data(db_url, embed_provider, embed_model, embed_key, embed_host, limit=None):
     """Load, chunk, and embed the extracted files."""
     if not os.path.exists(EXTRACT_DIR):
         print(f"Error: {EXTRACT_DIR} not found. Please run the download step first.")
@@ -119,6 +119,8 @@ def embed_data(db_url, embed_provider, embed_model, embed_key, embed_host):
     import psycopg2
 
     file_paths = glob.glob(os.path.join(EXTRACT_DIR, "**/*.*"), recursive=True)
+    if limit is not None:
+        file_paths = file_paths[:limit]
     raw_documents = []
     full_cases_to_insert = []
 
@@ -583,7 +585,8 @@ def main():
             download_courtlistener(limit=actual_limit)
             
     if args.action in ["embed", "all"]:
-        embed_data(db_url, args.embed_provider, args.embed_model, args.embed_key, args.embed_host)
+        actual_limit = None if args.all_cases else args.limit
+        embed_data(db_url, args.embed_provider, args.embed_model, args.embed_key, args.embed_host, limit=actual_limit)
 
 if __name__ == "__main__":
     main()
