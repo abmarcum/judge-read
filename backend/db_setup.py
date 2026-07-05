@@ -93,6 +93,18 @@ def setup_db():
         );
     """)
 
+    print("Creating search_cache table...")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS search_cache (
+            id SERIAL PRIMARY KEY,
+            query_hash VARCHAR(64) UNIQUE,
+            query_text TEXT NOT NULL,
+            response_answer TEXT NOT NULL,
+            response_sources JSONB NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
     # Note: Full-Text Search (Hybrid Search) index should be added to the langchain table
     # However, langchain_pg_embedding table is created by LangChain at runtime during ingestion.
     # We can create a trigger or simply add an index if the table exists.

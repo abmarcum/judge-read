@@ -56,6 +56,7 @@ class QueryResponse(BaseModel):
     answer: str
     sources: list
     session_id: str
+    cached: Optional[bool] = False
 
 class ConfigModel(BaseModel):
     embeddingModel: Optional[str] = "text-embedding-3-small"
@@ -268,6 +269,24 @@ def _expand_query(query: str, llm_engine: str, openai_key: str, anthropic_key: s
         print(f"Query expansion failed: {e}")
         return [query]
 
+import hashlib
+
+def _get_cache_hash(req: QueryRequest) -> str:
+    cache_dict = {
+        "query": (req.query or "").strip().lower(),
+        "expand_query": req.expand_query,
+        "llm_engine": req.llm_engine,
+        "embedding_model": req.embedding_model,
+        "filter_year": req.filter_year,
+        "filter_court": req.filter_court,
+        "filter_jurisdiction": req.filter_jurisdiction,
+        "filter_status": req.filter_status,
+        "filter_judge": req.filter_judge,
+        "filter_topic": req.filter_topic
+    }
+    serialized = json.dumps(cache_dict, sort_keys=True)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
 @traceable(name="judge_read_search_pipeline", run_type="chain")
 def _run_search_pipeline(req: QueryRequest):
     conn = get_db_connection()
@@ -279,8 +298,41 @@ def _run_search_pipeline(req: QueryRequest):
         cursor.execute("INSERT INTO chat_sessions (username) VALUES (%s) RETURNING id;", (req.username,))
         session_id = cursor.fetchone()[0]
         conn.commit()
+
+    # Compute cache hash
+    cache_hash = _get_cache_hash(req)
     
-    # Save user message to Chat History
+    # Check cache
+    try:
+        cursor.execute("""
+            SELECT response_answer, response_sources 
+            FROM search_cache 
+            WHERE query_hash = %s;
+        """, (cache_hash,))
+        cache_row = cursor.fetchone()
+        
+        if cache_row:
+            cached_answer = cache_row["response_answer"]
+            cached_sources = cache_row["response_sources"]
+            
+            # Save user message to Chat History
+            cursor.execute("INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)", 
+                           (session_id, 'user', req.query))
+            # Save Assistant cached message
+            cursor.execute("INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)", 
+                           (session_id, 'assistant', cached_answer))
+            conn.commit()
+            
+            print(f"✅ Cache HIT for query: '{req.query}'")
+            
+            cursor.close()
+            conn.close()
+            return QueryResponse(answer=cached_answer, sources=cached_sources, session_id=session_id, cached=True)
+    except Exception as cache_err:
+        print(f"Warning: Cache check failed: {cache_err}")
+        conn.rollback()
+        
+    # Save user message to Chat History (if cache missed)
     cursor.execute("INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)", 
                    (session_id, 'user', req.query))
     conn.commit()
@@ -446,10 +498,23 @@ def _run_search_pipeline(req: QueryRequest):
                    (session_id, 'assistant', answer))
     conn.commit()
 
+    # Save to Cache
+    try:
+        cursor.execute("""
+            INSERT INTO search_cache (query_hash, query_text, response_answer, response_sources)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (query_hash) DO NOTHING;
+        """, (cache_hash, req.query, answer, psycopg2.extras.Json(sources)))
+        conn.commit()
+        print("💾 Query cached successfully.")
+    except Exception as cache_save_err:
+        print(f"Warning: Failed to save to cache: {cache_save_err}")
+        conn.rollback()
+
     cursor.close()
     conn.close()
 
-    return QueryResponse(answer=answer, sources=sources, session_id=session_id)
+    return QueryResponse(answer=answer, sources=sources, session_id=session_id, cached=False)
 
 @app.get("/api/sessions/{session_id}/history")
 def get_chat_history(session_id: str):

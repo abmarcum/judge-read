@@ -696,6 +696,15 @@ function App() {
                 alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
                 maxWidth: '80%', display: 'flex', flexDirection: 'column', gap: '8px'
               }}>
+                {msg.role === 'assistant' && msg.cached && (
+                  <div style={{ 
+                    display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', 
+                    color: 'var(--accent-hover)', fontWeight: 600, alignSelf: 'flex-start', 
+                    marginLeft: '8px', marginBottom: '-4px' 
+                  }}>
+                    <span>⚡ Cached</span>
+                  </div>
+                )}
                 <div style={{ 
                   padding: '16px 20px', 
                   borderRadius: '16px',
@@ -1138,7 +1147,8 @@ function App() {
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: response.data.answer,
-        sources: response.data.sources
+        sources: response.data.sources,
+        cached: response.data.cached
       }]);
     } catch (error) {
       setMessages(prev => [...prev, {
