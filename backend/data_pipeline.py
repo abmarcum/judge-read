@@ -522,6 +522,7 @@ def main():
     
     # Tracing Options
     parser.add_argument("--langsmith-key", default=os.getenv("LANGCHAIN_API_KEY"), help="LangSmith API key for tracing telemetry")
+    parser.add_argument("--drop", action="store_true", help="Drop all existing database tables before recreating schemas and ingesting cases")
     args = parser.parse_args()
 
     if args.langsmith_key or os.getenv("LANGCHAIN_TRACING_V2") == "true":
@@ -547,6 +548,30 @@ def main():
         print(f"❌ Failed to connect to PostgreSQL: {e}")
         print("Please ensure PostgreSQL is running and the credentials are correct before starting.")
         return
+
+    if args.drop:
+        print("🗑️ Dropping all existing tables in database as requested by --drop...")
+        try:
+            import psycopg2
+            db_url_clean = db_url.replace("+psycopg2", "")
+            conn = psycopg2.connect(db_url_clean)
+            cursor = conn.cursor()
+            
+            tables_to_drop = [
+                "langchain_pg_embedding", "langchain_pg_collection",
+                "chat_messages", "chat_sessions", "analytics_queries",
+                "case_annotations", "full_cases"
+            ]
+            for table in tables_to_drop:
+                cursor.execute(f"DROP TABLE IF EXISTS {table} CASCADE;")
+                
+            conn.commit()
+            cursor.close()
+            conn.close()
+            print("✅ Database successfully cleaned! Starting with a fresh schema.")
+        except Exception as e:
+            print(f"❌ Failed to drop existing tables: {e}")
+            return
 
     if args.action in ["download", "all"]:
         # If the user passed --all-cases, force the limit to None

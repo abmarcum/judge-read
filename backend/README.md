@@ -120,6 +120,7 @@ uv run python data_pipeline.py --action all --limit 100
 * `--embed-model`: Specific model designation (defaults to `text-embedding-3-small` or `nomic-embed-text`).
 * `--embed-key`: API key for OpenAI (defaults to `OPENAI_API_KEY` env var).
 * `--embed-host`: Connection URL for Ollama instances (defaults to `http://localhost:11434`).
+* `--drop`: Drops all existing schema tables in the database before starting ingestion (useful for clean reinstalls).
 
 ---
 
