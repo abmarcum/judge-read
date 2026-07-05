@@ -527,21 +527,21 @@ function App() {
               {parsed.summary && (
                 <div>
                   <h3 style={{ color: 'var(--accent)', fontSize: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>Summary</h3>
-                  <ReactMarkdown>{parsed.summary}</ReactMarkdown>
+                  <LinkifyCitations content={parsed.summary} onResolve={resolveAndOpenCitation} />
                 </div>
               )}
               
               {parsed.syllabus && (
                 <div>
                   <h3 style={{ color: 'var(--accent)', fontSize: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>Syllabus</h3>
-                  <ReactMarkdown>{parsed.syllabus}</ReactMarkdown>
+                  <LinkifyCitations content={parsed.syllabus} onResolve={resolveAndOpenCitation} />
                 </div>
               )}
 
               {parsed.headnotes && (
                 <div>
                   <h3 style={{ color: 'var(--accent)', fontSize: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>Headnotes</h3>
-                  <ReactMarkdown>{parsed.headnotes}</ReactMarkdown>
+                  <LinkifyCitations content={parsed.headnotes} onResolve={resolveAndOpenCitation} />
                 </div>
               )}
 
@@ -551,7 +551,7 @@ function App() {
                   {parsed.opinions.map((o, idx) => (
                     <div key={idx} style={{ marginTop: '12px' }}>
                       {o.author_str && <h4 style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Author: {o.author_str}</h4>}
-                      <ReactMarkdown>{o.opinion_text}</ReactMarkdown>
+                      <LinkifyCitations content={o.opinion_text} onResolve={resolveAndOpenCitation} />
                       {idx < parsed.opinions.length - 1 && <hr style={{ borderColor: 'rgba(255,255,255,0.05)', margin: '20px 0' }}/>}
                     </div>
                   ))}
@@ -559,7 +559,7 @@ function App() {
               )}
             </div>
           ) : (
-            <ReactMarkdown>{scase.full_text}</ReactMarkdown>
+            <LinkifyCitations content={scase.full_text} onResolve={resolveAndOpenCitation} />
           )}
 
           {annotations.length > 0 && (
