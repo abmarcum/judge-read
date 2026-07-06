@@ -4,6 +4,21 @@ import { Search, Settings, Send, Scale, ChevronRight, X, Loader2, Book, User } f
 import ReactMarkdown from 'react-markdown';
 import './index.css';
 
+const stripHtmlMarkup = (text) => {
+  if (!text) return "";
+  // 1. Remove XML/HTML tags
+  let cleaned = text.replace(/<\/?[^>]+(>|$)/g, "");
+  // 2. Resolve HTML entities
+  cleaned = cleaned
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+  return cleaned;
+};
+
 const LinkifyCitations = ({ content, onResolve }) => {
   if (!content) return null;
   
@@ -760,21 +775,21 @@ function App() {
               {parsed.summary && (
                 <div>
                   <h3 style={{ color: 'var(--accent)', fontSize: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>Summary</h3>
-                  <LinkifyCitations content={parsed.summary} onResolve={resolveAndOpenCitation} />
+                  <LinkifyCitations content={stripHtmlMarkup(parsed.summary)} onResolve={resolveAndOpenCitation} />
                 </div>
               )}
               
               {parsed.syllabus && (
                 <div>
                   <h3 style={{ color: 'var(--accent)', fontSize: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>Syllabus</h3>
-                  <LinkifyCitations content={parsed.syllabus} onResolve={resolveAndOpenCitation} />
+                  <LinkifyCitations content={stripHtmlMarkup(parsed.syllabus)} onResolve={resolveAndOpenCitation} />
                 </div>
               )}
 
               {parsed.headnotes && (
                 <div>
                   <h3 style={{ color: 'var(--accent)', fontSize: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>Headnotes</h3>
-                  <LinkifyCitations content={parsed.headnotes} onResolve={resolveAndOpenCitation} />
+                  <LinkifyCitations content={stripHtmlMarkup(parsed.headnotes)} onResolve={resolveAndOpenCitation} />
                 </div>
               )}
 
@@ -784,7 +799,7 @@ function App() {
                   {parsed.opinions.map((o, idx) => (
                     <div key={idx} style={{ marginTop: '12px' }}>
                       {o.author_str && <h4 style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Author: {o.author_str}</h4>}
-                      <LinkifyCitations content={o.opinion_text} onResolve={resolveAndOpenCitation} />
+                      <LinkifyCitations content={stripHtmlMarkup(o.opinion_text)} onResolve={resolveAndOpenCitation} />
                       {idx < parsed.opinions.length - 1 && <hr style={{ borderColor: 'rgba(255,255,255,0.05)', margin: '20px 0' }}/>}
                     </div>
                   ))}
@@ -792,7 +807,7 @@ function App() {
               )}
             </div>
           ) : (
-            <LinkifyCitations content={scase.full_text} onResolve={resolveAndOpenCitation} />
+            <LinkifyCitations content={stripHtmlMarkup(scase.full_text)} onResolve={resolveAndOpenCitation} />
           )}
 
           {annotations.length > 0 && (
