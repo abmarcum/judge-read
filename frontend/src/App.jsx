@@ -9,15 +9,19 @@ const LinkifyCitations = ({ content, onResolve }) => {
   
   const citRegex = /\b(\d+)\s+((?:U\.S\.|F\.(?:2d|3d|4th)?|F\.\s*Supp\.(?:2d|3d)?|S\.\s*Ct\.|L\.\s*Ed\.(?:2d)?|A\.(?:2d|3d)?|P\.(?:2d|3d)?|N\.\s*E\.(?:2d)?|N\.\s*W\.(?:2d)?|S\.\s*E\.(?:2d)?|S\.\s*W\.(?:2d)?|So\.(?:2d|3d)?))\s+(\d+)\b/gi;
   
-  // Split the string by existing markdown citation links to avoid double-processing
-  const parts = content.split(/(\[[^\]]+\]\(citation:\/\/[^\)]+\))/gi);
+  // Split the string by existing markdown citation links (both legacy citation:// and new hash #citation- link formats)
+  const parts = content.split(/(\[[^\]]+\]\((?:citation:\/\/|#citation-)[^\)]+\))/gi);
   const linkifiedParts = parts.map((part) => {
-    if (part.startsWith('[') && part.includes('](citation://')) {
-      return part; // Return pre-linkified text exactly as is
+    if (part.startsWith('[') && (part.includes('](citation://') || part.includes('](#citation-'))) {
+      // Normalize legacy custom protocols to safe hash links to bypass ReactMarkdown URL sanitization
+      if (part.includes('](citation://')) {
+        return part.replace('](citation://', '](#citation-');
+      }
+      return part;
     }
-    // Only search/replace within plain text segments
+    // Search/replace plain text segments with safe hash links
     return part.replace(citRegex, (match) => {
-      return `[${match}](citation://${encodeURIComponent(match)})`;
+      return `[${match}](#citation-${encodeURIComponent(match)})`;
     });
   });
   
@@ -28,13 +32,27 @@ const LinkifyCitations = ({ content, onResolve }) => {
       className="markdown-body"
       components={{
         a: ({ href, children }) => {
-          if (href && (href.startsWith('citation://') || href.includes('citation://'))) {
-            const citationPart = href.substring(href.indexOf('citation://') + 11);
-            const citationText = decodeURIComponent(citationPart);
+          const isCitation = href && (
+            href.startsWith('#citation-') || 
+            href.includes('#citation-') ||
+            href.startsWith('citation://') || 
+            href.includes('citation://')
+          );
+          
+          if (isCitation) {
+            let citationText = '';
+            if (href.includes('citation://')) {
+              const citationPart = href.substring(href.indexOf('citation://') + 11);
+              citationText = decodeURIComponent(citationPart);
+            } else {
+              const citationPart = href.substring(href.indexOf('#citation-') + 10);
+              citationText = decodeURIComponent(citationPart);
+            }
+            
             return (
               <span 
                 className="citation-link" 
-                style={{ cursor: 'pointer', textDecoration: 'underline', color: 'var(--accent-color)' }}
+                style={{ cursor: 'pointer', textDecoration: 'underline', color: 'var(--accent-hover)', fontWeight: 500 }}
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
