@@ -1467,6 +1467,7 @@ function App() {
               placeholder={embeddingModel && embeddingModel.startsWith('Ollama:') ? 'Host (e.g. http://localhost:11434)' : 'API Key'}
               value={embeddingKey} 
               onChange={(e) => setEmbeddingKey(e.target.value)} 
+              autoComplete="new-password"
             />
           </div>
 
@@ -1487,6 +1488,7 @@ function App() {
               placeholder="sk-proj-..."
               value={openaiApiKey} 
               onChange={(e) => setOpenaiApiKey(e.target.value)} 
+              autoComplete="new-password"
             />
           </div>
 
@@ -1498,6 +1500,7 @@ function App() {
               placeholder="sk-ant-..."
               value={anthropicApiKey} 
               onChange={(e) => setAnthropicApiKey(e.target.value)} 
+              autoComplete="new-password"
             />
           </div>
 
@@ -1531,7 +1534,7 @@ function App() {
               </div>
               <div style={{ flex: 1 }}>
                 <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Password</label>
-                <input type="password" className="input-glass" value={pgPassword} onChange={(e) => setPgPassword(e.target.value)} />
+                <input type="password" className="input-glass" value={pgPassword} onChange={(e) => setPgPassword(e.target.value)} autoComplete="new-password" />
               </div>
             </div>
             <div>
@@ -1550,6 +1553,7 @@ function App() {
               value={cohereKey} 
               onChange={(e) => setCohereKey(e.target.value)} 
               style={{ marginBottom: '16px' }}
+              autoComplete="new-password"
             />
 
             <h3 style={{ fontSize: '1rem', fontWeight: 500, marginBottom: '12px' }}>LangSmith Tracing</h3>
@@ -1560,6 +1564,7 @@ function App() {
               placeholder="lsv2_pt_..."
               value={langsmithKey} 
               onChange={(e) => setLangsmithKey(e.target.value)} 
+              autoComplete="new-password"
             />
           </div>
         </div>
