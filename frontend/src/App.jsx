@@ -7,7 +7,13 @@ import './index.css';
 const LinkifyCitations = ({ content, onResolve }) => {
   if (!content) return null;
   
-  const citRegex = /\b(\d+)\s+((?:U\.S\.|F\.(?:2d|3d|4th)?|F\.\s*Supp\.(?:2d|3d)?|S\.\s*Ct\.|L\.\s*Ed\.(?:2d)?|A\.(?:2d|3d)?|P\.(?:2d|3d)?|N\.\s*E\.(?:2d)?|N\.\s*W\.(?:2d)?|S\.\s*E\.(?:2d)?|S\.\s*W\.(?:2d)?|So\.(?:2d|3d)?))\s+(\d+)\b/gi;
+  const citRegex = /\b\d+\s+((?:[A-Z][A-Za-z0-9\.]*|\d+(?:d|th|st|rd))(?:\s+(?:[A-Z][A-Za-z0-9\.]*|\d+(?:d|th|st|rd))){0,4})\s+\d+\b/gi;
+  const blacklist = new Set([
+    'page', 'pages', 'section', 'sections', 'table', 'tables', 'chapter', 'chapters', 
+    'part', 'parts', 'article', 'articles', 'line', 'lines', 'vol', 'volume', 'no', 
+    'number', 'paragraph', 'rule', 'rules', 'day', 'year', 'month', 'act', 'amendment', 
+    'congress', 'house', 'senate'
+  ]);
   
   // Split the string by existing markdown citation links (both legacy citation:// and new hash #citation- link formats)
   const parts = content.split(/(\[[^\]]+\]\((?:citation:\/\/|#citation-)[^\)]+\))/gi);
@@ -20,7 +26,13 @@ const LinkifyCitations = ({ content, onResolve }) => {
       return part;
     }
     // Search/replace plain text segments with safe hash links
-    return part.replace(citRegex, (match) => {
+    return part.replace(citRegex, (match, reporter) => {
+      if (reporter) {
+        const words = reporter.toLowerCase().split(/\s+/);
+        if (words.some(w => blacklist.has(w.replace(/[.,()\[\]]/g, '')))) {
+          return match;
+        }
+      }
       return `[${match}](#citation-${encodeURIComponent(match)})`;
     });
   });

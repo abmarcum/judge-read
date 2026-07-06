@@ -170,15 +170,23 @@ def embed_data(db_url, embed_provider, embed_model, embed_key, embed_host, limit
     def linkify_citations(text):
         if not text:
             return ""
-        # Regex to match case law citations like "347 U.S. 483"
+        # Broad regex matching both state and federal case citations
         cit_regex = re.compile(
-            r'\b(\d+)\s+((?:U\.S\.|F\.(?:2d|3d|4th)?|F\.\s*Supp\.(?:2d|3d)?|S\.\s*Ct\.|L\.\s*Ed\.(?:2d)?|A\.(?:2d|3d)?|P\.(?:2d|3d)?|N\.\s*E\.(?:2d)?|N\.\s*W\.(?:2d)?|S\.\s*E\.(?:2d)?|S\.\s*W\.(?:2d)?|So\.(?:2d|3d)?))\s+(\d+)\b',
+            r'\b\d+\s+((?:[A-Z][A-Za-z0-9\.]*|\d+(?:d|th|st|rd))(?:\s+(?:[A-Z][A-Za-z0-9\.]*|\d+(?:d|th|st|rd))){0,4})\s+\d+\b',
             re.IGNORECASE
         )
+        blacklist = {'page', 'pages', 'section', 'sections', 'table', 'tables', 'chapter', 'chapters', 'part', 'parts', 'article', 'articles', 'line', 'lines', 'vol', 'volume', 'no', 'number', 'paragraph', 'rule', 'rules', 'day', 'year', 'month', 'act', 'amendment', 'congress', 'house', 'senate'}
+        
         def replace_match(match):
             full_match = match.group(0)
+            parts = full_match.split()
+            if len(parts) >= 3:
+                words = [w.lower().strip(".,()[]") for w in parts[1:-1]]
+                if any(w in blacklist for w in words):
+                    return full_match
             encoded = urllib.parse.quote(full_match)
-            return f"[{full_match}](citation://{encoded})"
+            return f"[{full_match}](#citation-{encoded})"
+            
         return cit_regex.sub(replace_match, text)
 
     def determine_status(text):

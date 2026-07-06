@@ -989,12 +989,15 @@ BRIEF TEXT:
 
 @app.post("/api/citations/resolve")
 def resolve_citations(req: CitationResolveRequest):
-    cit_pattern = r'\b\d+\s+(?:U\.S\.|F\.(?:2d|3d|4th)?|F\.\s*Supp\.(?:2d|3d)?|S\.\s*Ct\.|L\.\s*Ed\.(?:2d)?|A\.(?:2d|3d)?|P\.(?:2d|3d)?|N\.\s*E\.(?:2d)?|N\.\s*W\.(?:2d)?|S\.\s*E\.(?:2d)?|S\.\s*W\.(?:2d)?|So\.(?:2d|3d)?)\s+\d+\b'
-    matches = re.findall(cit_pattern, req.text, re.IGNORECASE)
+    # Matches both state and federal legal reporters dynamically
+    cit_pattern = r'\b\d+\s+((?:[A-Z][A-Za-z0-9\.]*|\d+(?:d|th|st|rd))(?:\s+(?:[A-Z][A-Za-z0-9\.]*|\d+(?:d|th|st|rd))){0,4})\s+\d+\b'
+    matches = [m.group(0) for m in re.finditer(cit_pattern, req.text, re.IGNORECASE)]
     
     if not matches:
         return {"citations": []}
         
+    blacklist = {'page', 'pages', 'section', 'sections', 'table', 'tables', 'chapter', 'chapters', 'part', 'parts', 'article', 'articles', 'line', 'lines', 'vol', 'volume', 'no', 'number', 'paragraph', 'rule', 'rules', 'day', 'year', 'month', 'act', 'amendment', 'congress', 'house', 'senate'}
+    
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     
@@ -1002,6 +1005,14 @@ def resolve_citations(req: CitationResolveRequest):
     seen = set()
     for citation in matches:
         citation_clean = re.sub(r'\s+', ' ', citation).strip()
+        
+        # Check blacklist words
+        parts = citation_clean.split()
+        if len(parts) >= 3:
+            words = [w.lower().strip(".,()[]") for w in parts[1:-1]]
+            if any(w in blacklist for w in words):
+                continue
+                
         if citation_clean.lower() in seen:
             continue
         seen.add(citation_clean.lower())
