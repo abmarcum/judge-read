@@ -28,12 +28,18 @@ const LinkifyCitations = ({ content, onResolve }) => {
       className="markdown-body"
       components={{
         a: ({ href, children }) => {
-          if (href && href.startsWith('citation://')) {
-            const citationText = decodeURIComponent(href.replace('citation://', ''));
+          if (href && (href.startsWith('citation://') || href.includes('citation://'))) {
+            const citationPart = href.substring(href.indexOf('citation://') + 11);
+            const citationText = decodeURIComponent(citationPart);
             return (
               <span 
                 className="citation-link" 
-                onClick={() => onResolve(citationText)}
+                style={{ cursor: 'pointer', textDecoration: 'underline', color: 'var(--accent-color)' }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onResolve(citationText);
+                }}
               >
                 {children}
               </span>
@@ -143,19 +149,9 @@ function App() {
   const [showLiveProgress, setShowLiveProgress] = useState(false);
 
   useEffect(() => {
-    let interval;
-    if (isLoading) {
-      setLoadingStep(0);
-      interval = setInterval(() => {
-        setLoadingStep(prev => {
-          if (prev < 6) return prev + 1;
-          return prev;
-        });
-      }, 1200);
-    } else {
+    if (!isLoading) {
       setLoadingStep(0);
     }
-    return () => clearInterval(interval);
   }, [isLoading]);
 
   useEffect(() => {
@@ -1242,41 +1238,83 @@ function App() {
     setMessages(prev => [...prev, userMessage]);
     setQuery('');
     setIsLoading(true);
+    setLoadingStep(0);
 
     try {
-      const response = await axios.post(getApiUrl('/api/search'), {
-        query: userMessage.content,
-        session_id: sessionId,
-        username: username || null,
-        embedding_model: embeddingModel,
-        embedding_key: embeddingKey,
-        llm_engine: llmEngine,
-        openai_api_key: openaiApiKey,
-        anthropic_api_key: anthropicApiKey,
-        ollama_host: ollamaHost,
-        filter_year: filterYear ? parseInt(filterYear) : null,
-        filter_court: filterCourt ? filterCourt : null,
-        filter_jurisdiction: filterSystem === 'Federal' ? 'Federal' : (filterSystem === 'State' ? (filterState || 'State') : null),
-        filter_status: filterStatus ? filterStatus : null,
-        filter_judge: filterJudge ? filterJudge : null,
-        filter_topic: filterTopic ? filterTopic : null,
-        langsmith_key: langsmithKey ? langsmithKey : null,
-        cohere_key: cohereKey ? cohereKey : null,
-        expand_query: expandQuery
+      const response = await fetch(getApiUrl('/api/search'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          query: userMessage.content,
+          session_id: sessionId,
+          username: username || null,
+          embedding_model: embeddingModel,
+          embedding_key: embeddingKey,
+          llm_engine: llmEngine,
+          openai_api_key: openaiApiKey,
+          anthropic_api_key: anthropicApiKey,
+          ollama_host: ollamaHost,
+          filter_year: filterYear ? parseInt(filterYear) : null,
+          filter_court: filterCourt ? filterCourt : null,
+          filter_jurisdiction: filterSystem === 'Federal' ? 'Federal' : (filterSystem === 'State' ? (filterState || 'State') : null),
+          filter_status: filterStatus ? filterStatus : null,
+          filter_judge: filterJudge ? filterJudge : null,
+          filter_topic: filterTopic ? filterTopic : null,
+          langsmith_key: langsmithKey ? langsmithKey : null,
+          cohere_key: cohereKey ? cohereKey : null,
+          expand_query: expandQuery
+        })
       });
 
-      if (!sessionId && response.data.session_id) {
-        setSessionId(response.data.session_id);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: response.data.answer,
-        sources: response.data.sources,
-        cached: response.data.cached,
-        steps: response.data.steps
-      }]);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.substring(6));
+              if (data.type === 'step') {
+                const stepText = data.step;
+                const matchStr = stepText.substring(0, 8);
+                const idx = PIPELINE_STEPS.findIndex(s => s.startsWith(matchStr));
+                if (idx !== -1) {
+                  setLoadingStep(idx);
+                }
+              } else if (data.type === 'result') {
+                if (!sessionId && data.session_id) {
+                  setSessionId(data.session_id);
+                }
+                setMessages(prev => [...prev, {
+                  role: 'assistant',
+                  content: data.answer,
+                  sources: data.sources,
+                  cached: data.cached,
+                  steps: data.steps
+                }]);
+              }
+            } catch (err) {
+              console.error("Failed to parse stream chunk", err);
+            }
+          }
+        }
+      }
     } catch (error) {
+      console.error("Search error:", error);
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: 'I encountered an error connecting to the retrieval system. Please check your backend.',

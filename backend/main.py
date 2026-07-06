@@ -125,7 +125,7 @@ def save_config(config: ConfigModel):
         json.dump(config.dict(), f, indent=4)
     return {"status": "saved"}
 
-@app.post("/api/search", response_model=QueryResponse)
+@app.post("/api/search")
 def search_cases(req: QueryRequest):
     # Setup LangSmith Tracing FIRST before calling the traced function
     if req.langsmith_key:
@@ -136,29 +136,36 @@ def search_cases(req: QueryRequest):
         # Prevent leaking previous request's traces if no key provided
         del os.environ["LANGCHAIN_TRACING_V2"]
         
-    try:
-        return _run_search_pipeline(req)
-    except Exception as e:
-        print(f"Error in search pipeline: {e}")
-        import traceback
-        traceback.print_exc()
-        import uuid
-        fallback_session_id = req.session_id
-        if not fallback_session_id:
-            fallback_session_id = str(uuid.uuid4())
-        else:
-            try:
-                uuid.UUID(str(req.session_id))
-            except ValueError:
+    def sse_error_wrapper():
+        try:
+            for chunk in _run_search_pipeline_generator(req):
+                yield chunk
+        except Exception as e:
+            print(f"Error in search pipeline: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            import uuid
+            fallback_session_id = req.session_id
+            if not fallback_session_id:
                 fallback_session_id = str(uuid.uuid4())
+            else:
+                try:
+                    uuid.UUID(str(req.session_id))
+                except ValueError:
+                    fallback_session_id = str(uuid.uuid4())
+                    
+            err_res = {
+                "type": "result",
+                "answer": f"I encountered an error connecting to the retrieval system: {e}\n\nPlease check your backend and model configuration.",
+                "sources": [],
+                "session_id": fallback_session_id,
+                "cached": False,
+                "steps": [f"❌ Pipeline Error: {e}"]
+            }
+            yield f"data: {json.dumps(err_res)}\n\n"
 
-        return QueryResponse(
-            answer=f"I encountered an error connecting to the retrieval system: {e}\n\nPlease check your backend and model configuration.",
-            sources=[],
-            session_id=fallback_session_id,
-            cached=False,
-            steps=[f"❌ Pipeline Error: {e}"]
-        )
+    return StreamingResponse(sse_error_wrapper(), media_type="text/event-stream")
 
 @traceable(name="postgres_hybrid_search", run_type="retriever")
 def fetch_from_postgres(cursor, hybrid_search_sql, query, filter_params):
@@ -383,28 +390,35 @@ def _get_cache_hash(req: QueryRequest) -> str:
     serialized = json.dumps(cache_dict, sort_keys=True)
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
-@traceable(name="judge_read_search_pipeline", run_type="chain")
-def _run_search_pipeline(req: QueryRequest):
+@traceable(name="judge_read_search_pipeline_generator", run_type="chain")
+def _run_search_pipeline_generator(req: QueryRequest):
     import time
+    import json
     pipeline_start = time.time()
     steps_run = []
+    
+    def yield_step(step_msg: str):
+        steps_run.append(step_msg)
+        return f"data: {json.dumps({'type': 'step', 'step': step_msg})}\n\n"
 
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     
-    # Session Handling
-    session_id = req.session_id
-    if not session_id:
-        cursor.execute("INSERT INTO chat_sessions (username) VALUES (%s) RETURNING id;", (req.username,))
-        session_id = cursor.fetchone()[0]
-        conn.commit()
-
-    # Compute cache hash
-    cache_hash = _get_cache_hash(req)
-    
-    # Check cache
-    step_start = time.time()
     try:
+        # Session Handling
+        session_id = req.session_id
+        if not session_id:
+            cursor.execute("INSERT INTO chat_sessions (username) VALUES (%s) RETURNING id;", (req.username,))
+            session_id = cursor.fetchone()[0]
+            conn.commit()
+
+        # Compute cache hash
+        cache_hash = _get_cache_hash(req)
+        
+        # Check cache
+        yield yield_step("🔍 Checking query signature in search cache...")
+        step_start = time.time()
+        
         cursor.execute("""
             SELECT response_answer, response_sources 
             FROM search_cache 
@@ -416,30 +430,45 @@ def _run_search_pipeline(req: QueryRequest):
             cached_answer = cache_row["response_answer"]
             cached_sources = cache_row["response_sources"]
             
-            # Save user message to Chat History
             cursor.execute("INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)", 
                            (session_id, 'user', req.query))
-            # Save Assistant cached message
             cursor.execute("INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)", 
                            (session_id, 'assistant', cached_answer))
             conn.commit()
             
             print(f"✅ Cache HIT for query: '{req.query}'")
             
+            if steps_run:
+                steps_run.pop()
             duration_ms = (time.time() - step_start) * 1000
-            steps_run.append(f"🔍 Cache check: HIT (Instant retrieval, {duration_ms:.1f}ms)")
+            yield yield_step(f"🔍 Checking query signature: HIT (Instant retrieval, {duration_ms:.1f}ms)")
+            
             total_ms = (time.time() - pipeline_start) * 1000
             steps_run.append(f"🏁 Execution Finished: Total query pipeline time ({total_ms:.1f}ms)")
             
             cursor.close()
             conn.close()
-            return QueryResponse(answer=cached_answer, sources=cached_sources, session_id=session_id, cached=True, steps=steps_run)
+            
+            final_res = {
+                "type": "result",
+                "answer": cached_answer,
+                "sources": cached_sources,
+                "session_id": session_id,
+                "cached": True,
+                "steps": steps_run
+            }
+            yield f"data: {json.dumps(final_res)}\n\n"
+            return
+            
     except Exception as cache_err:
         print(f"Warning: Cache check failed: {cache_err}")
         conn.rollback()
         
+    # Cache Miss
+    if steps_run and steps_run[-1].startswith("🔍 Checking"):
+        steps_run.pop()
     duration_ms = (time.time() - step_start) * 1000
-    steps_run.append(f"🔍 Cache check: MISS (Direct generation required, {duration_ms:.1f}ms)")
+    yield yield_step(f"🔍 Checking query signature: MISS (Direct generation required, {duration_ms:.1f}ms)")
 
     # Save user message to Chat History (if cache missed)
     cursor.execute("INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)", 
@@ -447,6 +476,7 @@ def _run_search_pipeline(req: QueryRequest):
     conn.commit()
     
     # Query Expansion Step
+    yield yield_step("🔄 Expanding query for semantic search terms...")
     step_start = time.time()
     queries_to_search = [req.query]
     if req.expand_query:
@@ -454,11 +484,17 @@ def _run_search_pipeline(req: QueryRequest):
         print(f"Query Expansion triggered. Expanded queries: {expanded}")
         queries_to_search.extend(expanded)
         duration_ms = (time.time() - step_start) * 1000
-        steps_run.append(f"🔄 Query Expansion: Generated 3 search variations ({duration_ms:.1f}ms)")
+        if steps_run and steps_run[-1].startswith("🔄"):
+            steps_run.pop()
+        yield yield_step(f"🔄 Expanding query for semantic search terms: Generated 3 variations ({duration_ms:.1f}ms)")
     else:
-        steps_run.append("🔄 Query Expansion: Skipped (Using raw search query)")
+        if steps_run and steps_run[-1].startswith("🔄"):
+            steps_run.pop()
+        yield yield_step("🔄 Expanding query for semantic search terms: Skipped (Using raw search query)")
 
     # Initialize Embedding once
+    yield yield_step("🧠 Generating query embeddings...")
+    step_start = time.time()
     embeddings = None
     try:
         # Check for host/key mismatches (URL in OpenAI key field)
@@ -495,44 +531,9 @@ def _run_search_pipeline(req: QueryRequest):
         print(f"Embedding initialization failed: {e}")
         raise e
 
-    # Build filters once
-    filter_sql = ""
-    filter_params = []
-    if req.filter_year:
-        filter_sql += " AND (cmetadata->>'year')::int >= %s"
-        filter_params.append(req.filter_year)
-    if req.filter_court:
-        filter_sql += " AND cmetadata->>'court' = %s"
-        filter_params.append(req.filter_court)
-    if req.filter_jurisdiction:
-        if req.filter_jurisdiction == 'State':
-            filter_sql += " AND cmetadata->>'jurisdiction' != 'Federal'"
-        else:
-            filter_sql += " AND cmetadata->>'jurisdiction' = %s"
-            filter_params.append(req.filter_jurisdiction)
-    if req.filter_status == 'good_law':
-        filter_sql += " AND cmetadata->>'status' = 'good_law'"
-    if req.filter_judge:
-        filter_sql += " AND cmetadata->>'judge' ILIKE %s"
-        filter_params.append(f"%{req.filter_judge}%")
-    if req.filter_topic:
-        filter_sql += " AND cmetadata->>'topic' = %s"
-        filter_params.append(req.filter_topic)
-
-    combined_results = []
-    seen_case_ids = set()
-
-    for current_query in queries_to_search:
-        try:
-            if embeddings:
-                query_embedding = embeddings.embed_query(current_query)
-            else:
-                raise ValueError("No embeddings object initialized")
-        except Exception as e:
-            print(f"Embedding failed for '{current_query}': {e}")
-            query_embedding = [0.0] * 1536 if "Ollama" not in req.embedding_model and "ollama" not in req.embedding_model else [0.0] * 768
-
-    # Embeddings & Database lookup step
+    if steps_run and steps_run[-1].startswith("🧠"):
+        steps_run.pop()
+    yield yield_step("📚 Executing PostgreSQL hybrid vector + FTS search...")
     step_start = time.time()
     combined_results = []
     seen_case_ids = set()
@@ -549,6 +550,30 @@ def _run_search_pipeline(req: QueryRequest):
 
         vector_query = f"'[{','.join(map(str, query_embedding))}]'"
         
+        # Build filters once
+        filter_sql = ""
+        filter_params = []
+        if req.filter_year:
+            filter_sql += " AND (cmetadata->>'year')::int >= %s"
+            filter_params.append(req.filter_year)
+        if req.filter_court:
+            filter_sql += " AND cmetadata->>'court' = %s"
+            filter_params.append(req.filter_court)
+        if req.filter_jurisdiction:
+            if req.filter_jurisdiction == 'State':
+                filter_sql += " AND cmetadata->>'jurisdiction' != 'Federal'"
+            else:
+                filter_sql += " AND cmetadata->>'jurisdiction' = %s"
+                filter_params.append(req.filter_jurisdiction)
+        if req.filter_status == 'good_law':
+            filter_sql += " AND cmetadata->>'status' = 'good_law'"
+        if req.filter_judge:
+            filter_sql += " AND cmetadata->>'judge' ILIKE %s"
+            filter_params.append(f"%{req.filter_judge}%")
+        if req.filter_topic:
+            filter_sql += " AND cmetadata->>'topic' = %s"
+            filter_params.append(req.filter_topic)
+
         hybrid_search_sql = f"""
             SELECT 
                 e.document, 
@@ -576,9 +601,12 @@ def _run_search_pipeline(req: QueryRequest):
     # Limit total candidate results for reranking
     results = combined_results[:30]
     duration_ms = (time.time() - step_start) * 1000
-    steps_run.append(f"🧠 Embeddings & DB Hybrid Search: Encoded queries and queried PostgreSQL ({duration_ms:.1f}ms)")
+    if steps_run and steps_run[-1].startswith("📚"):
+        steps_run.pop()
+    yield yield_step(f"📚 Executing PostgreSQL hybrid search: Retrieved {len(results)} candidates ({duration_ms:.1f}ms)")
 
     # Cohere Reranking
+    yield yield_step("🎯 Reranking documents with Cohere...")
     step_start = time.time()
     if req.cohere_key and len(results) > 0:
         @traceable(name="cohere_rerank", run_type="retriever")
@@ -601,15 +629,20 @@ def _run_search_pipeline(req: QueryRequest):
                 reranked_results.append(results[r.index])
             results = reranked_results
             duration_ms = (time.time() - step_start) * 1000
-            steps_run.append(f"🎯 Cohere Rerank: Reduced candidates to top 5 ({duration_ms:.1f}ms)")
-            print(f"Successfully reranked {len(documents)} docs down to {len(results)} using Cohere.")
+            if steps_run and steps_run[-1].startswith("🎯"):
+                steps_run.pop()
+            yield yield_step(f"🎯 Reranking documents with Cohere: Reduced to top 5 ({duration_ms:.1f}ms)")
         except Exception as e:
             print(f"Cohere reranking failed: {e}")
             results = results[:5]
-            steps_run.append("🎯 Cohere Rerank: Failed fallback to top 5")
+            if steps_run and steps_run[-1].startswith("🎯"):
+                steps_run.pop()
+            yield yield_step("🎯 Reranking documents with Cohere: Failed, fallback to top 5")
     else:
         results = results[:5]
-        steps_run.append("🎯 Cohere Rerank: Skipped (Cohere API key not set or no results)")
+        if steps_run and steps_run[-1].startswith("🎯"):
+            steps_run.pop()
+        yield yield_step("🎯 Reranking documents with Cohere: Skipped (Cohere API key not set or no results)")
 
     # Format sources and extract Citator / Overruled status
     sources = []
@@ -640,8 +673,16 @@ def _run_search_pipeline(req: QueryRequest):
     conn.commit()
 
     # Generate Answer using LLM
+    yield yield_step("⚖️ Simulating Attorney Agent advocacy framing...")
+    initial_steps_len = len(steps_run)
     answer = generate_answer(req.llm_engine, req.openai_api_key, req.anthropic_api_key, req.ollama_host, sources, cursor, session_id, steps_run=steps_run)
     
+    if "⚖️ Simulating Attorney Agent advocacy framing..." in steps_run:
+        steps_run.remove("⚖️ Simulating Attorney Agent advocacy framing...")
+    
+    for timed_step in steps_run[initial_steps_len - 1:]:
+        yield f"data: {json.dumps({'type': 'step', 'step': timed_step})}\n\n"
+
     # Save Assistant message
     cursor.execute("INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)", 
                    (session_id, 'assistant', answer))
@@ -655,7 +696,6 @@ def _run_search_pipeline(req: QueryRequest):
             ON CONFLICT (query_hash) DO NOTHING;
         """, (cache_hash, req.query, answer, psycopg2.extras.Json(sources)))
         conn.commit()
-        print("💾 Query cached successfully.")
     except Exception as cache_save_err:
         print(f"Warning: Failed to save to cache: {cache_save_err}")
         conn.rollback()
@@ -666,7 +706,36 @@ def _run_search_pipeline(req: QueryRequest):
     cursor.close()
     conn.close()
 
-    return QueryResponse(answer=answer, sources=sources, session_id=session_id, cached=False, steps=steps_run)
+    final_res = {
+        "type": "result",
+        "answer": answer,
+        "sources": sources,
+        "session_id": session_id,
+        "cached": False,
+        "steps": steps_run
+    }
+    yield f"data: {json.dumps(final_res)}\n\n"
+
+@traceable(name="judge_read_search_pipeline", run_type="chain")
+def _run_search_pipeline(req: QueryRequest):
+    last_res = None
+    for chunk in _run_search_pipeline_generator(req):
+        if chunk.startswith("data: "):
+            try:
+                data = json.loads(chunk[6:])
+                if data.get("type") == "result":
+                    last_res = QueryResponse(
+                        answer=data["answer"],
+                        sources=data["sources"],
+                        session_id=data["session_id"],
+                        cached=data["cached"],
+                        steps=data["steps"]
+                    )
+            except Exception:
+                pass
+    if last_res:
+        return last_res
+    raise ValueError("Pipeline did not yield a valid final result")
 
 @app.get("/api/sessions/{session_id}/history")
 def get_chat_history(session_id: str):

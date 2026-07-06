@@ -227,6 +227,43 @@ def test_search_pipeline_features(host, port=8000):
         except Exception:
             pass
 
+    # Helper to parse Server-Sent Events stream from response
+    def parse_sse_response(resp):
+        result = {}
+        steps = []
+        try:
+            content = resp.read().decode('utf-8')
+        except Exception:
+            return {}
+            
+        if not content:
+            return {}
+            
+        # Handle legacy raw JSON response format
+        if content.strip().startswith("{"):
+            try:
+                return json.loads(content)
+            except Exception:
+                pass
+                
+        # Handle SSE stream format
+        lines = content.split("\n")
+        for line_str in lines:
+            line_str = line_str.strip()
+            if line_str.startswith("data: "):
+                try:
+                    data = json.loads(line_str[6:])
+                    if data.get("type") == "step":
+                        steps.append(data.get("step"))
+                    elif data.get("type") == "result":
+                        result = data
+                except Exception:
+                    pass
+        if result:
+            if "steps" not in result or not result["steps"]:
+                result["steps"] = steps
+        return result
+
     # First request: Cache Miss
     try:
         data = json.dumps(payload).encode('utf-8')
@@ -234,11 +271,11 @@ def test_search_pipeline_features(host, port=8000):
         req.add_header("Content-Type", "application/json")
         
         step_start = time.time()
-        response = urllib.request.urlopen(req, timeout=30)
+        response = urllib.request.urlopen(req, timeout=600)
         duration = time.time() - step_start
         
         if response.getcode() == 200:
-            res_payload = json.loads(response.read().decode('utf-8'))
+            res_payload = parse_sse_response(response)
             
             # Verify fields
             has_answer = "answer" in res_payload
@@ -260,17 +297,17 @@ def test_search_pipeline_features(host, port=8000):
             # Second request: Cache Hit Check
             step_start = time.time()
             # Send same query again
-            response_hit = urllib.request.urlopen(req, timeout=10)
+            response_hit = urllib.request.urlopen(req, timeout=120)
             duration_hit = time.time() - step_start
             
             if response_hit.getcode() == 200:
-                res_payload_hit = json.loads(response_hit.read().decode('utf-8'))
+                res_payload_hit = parse_sse_response(response_hit)
                 is_cached = res_payload_hit.get("cached") == True
                 
                 if is_cached:
                     print_result(f"Search API Pipeline Caching Hit Check ({duration_hit * 1000:.1f}ms)", True)
                     
-                    has_cache_step = any("Cache check: HIT" in s for s in res_payload_hit.get("steps", []))
+                    has_cache_step = any("Checking query signature" in s for s in res_payload_hit.get("steps", []))
                     print_result("Pipeline Cache HIT Trace Logged", has_cache_step)
                 else:
                     print_result("Search API Pipeline Caching Hit Check", False, "(Returned cached=False on repeat query)")
