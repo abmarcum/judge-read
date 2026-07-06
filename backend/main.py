@@ -168,9 +168,9 @@ def search_cases(req: QueryRequest):
     return StreamingResponse(sse_error_wrapper(), media_type="text/event-stream")
 
 @traceable(name="postgres_hybrid_search", run_type="retriever")
-def fetch_from_postgres(cursor, hybrid_search_sql, query, filter_params):
+def fetch_from_postgres(cursor, hybrid_search_sql, params):
     try:
-        cursor.execute(hybrid_search_sql, [query] + filter_params)
+        cursor.execute(hybrid_search_sql, params)
         return cursor.fetchall()
     except Exception as e:
         print(f"Hybrid search failed, maybe tables aren't setup: {e}")
@@ -538,65 +538,106 @@ def _run_search_pipeline_generator(req: QueryRequest):
     combined_results = []
     seen_case_ids = set()
 
-    for current_query in queries_to_search:
+    def run_single_query_search(current_query):
+        thread_conn = get_db_connection()
+        thread_cursor = thread_conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         try:
-            if embeddings:
-                query_embedding = embeddings.embed_query(current_query)
-            else:
-                raise ValueError("No embeddings object initialized")
-        except Exception as e:
-            print(f"Embedding failed for '{current_query}': {e}")
-            query_embedding = [0.0] * 1536 if "Ollama" not in req.embedding_model and "ollama" not in req.embedding_model else [0.0] * 768
+            try:
+                if embeddings:
+                    query_embedding = embeddings.embed_query(current_query)
+                else:
+                    raise ValueError("No embeddings object initialized")
+            except Exception as e:
+                print(f"Embedding failed for '{current_query}': {e}")
+                query_embedding = [0.0] * 1536 if "Ollama" not in req.embedding_model and "ollama" not in req.embedding_model else [0.0] * 768
 
-        vector_query = f"'[{','.join(map(str, query_embedding))}]'"
-        
-        # Build filters once
-        filter_sql = ""
-        filter_params = []
-        if req.filter_year:
-            filter_sql += " AND (cmetadata->>'year')::int >= %s"
-            filter_params.append(req.filter_year)
-        if req.filter_court:
-            filter_sql += " AND cmetadata->>'court' = %s"
-            filter_params.append(req.filter_court)
-        if req.filter_jurisdiction:
-            if req.filter_jurisdiction == 'State':
-                filter_sql += " AND cmetadata->>'jurisdiction' != 'Federal'"
-            else:
-                filter_sql += " AND cmetadata->>'jurisdiction' = %s"
-                filter_params.append(req.filter_jurisdiction)
-        if req.filter_status == 'good_law':
-            filter_sql += " AND cmetadata->>'status' = 'good_law'"
-        if req.filter_judge:
-            filter_sql += " AND cmetadata->>'judge' ILIKE %s"
-            filter_params.append(f"%{req.filter_judge}%")
-        if req.filter_topic:
-            filter_sql += " AND cmetadata->>'topic' = %s"
-            filter_params.append(req.filter_topic)
+            vector_query = f"'[{','.join(map(str, query_embedding))}]'"
+            
+            # Build filters
+            filter_sql = ""
+            filter_params = []
+            if req.filter_year:
+                filter_sql += " AND (cmetadata->>'year')::int >= %s"
+                filter_params.append(req.filter_year)
+            if req.filter_court:
+                filter_sql += " AND cmetadata->>'court' = %s"
+                filter_params.append(req.filter_court)
+            if req.filter_jurisdiction:
+                if req.filter_jurisdiction == 'State':
+                    filter_sql += " AND cmetadata->>'jurisdiction' != 'Federal'"
+                else:
+                    filter_sql += " AND cmetadata->>'jurisdiction' = %s"
+                    filter_params.append(req.filter_jurisdiction)
+            if req.filter_status == 'good_law':
+                filter_sql += " AND cmetadata->>'status' = 'good_law'"
+            if req.filter_judge:
+                filter_sql += " AND cmetadata->>'judge' ILIKE %s"
+                filter_params.append(f"%{req.filter_judge}%")
+            if req.filter_topic:
+                filter_sql += " AND cmetadata->>'topic' = %s"
+                filter_params.append(req.filter_topic)
 
-        hybrid_search_sql = f"""
-            SELECT 
-                e.document, 
-                e.cmetadata, 
-                e.embedding <=> {vector_query} AS vector_distance,
-                ts_rank_cd(e.tsvector_doc, plainto_tsquery('english', %s)) AS fts_rank,
-                substring(f.full_text from '"case_name_full":\\s*"([^"]+)"') AS case_name_full
-            FROM langchain_pg_embedding e
-            LEFT JOIN full_cases f ON (e.cmetadata->>'case_id') = f.case_id
-            WHERE 1=1 {filter_sql.replace('cmetadata', 'e.cmetadata')}
-            ORDER BY (e.embedding <=> {vector_query}) ASC, fts_rank DESC
-            LIMIT 15;
-        """
-        
-        try:
-            curr_results = fetch_from_postgres(cursor, hybrid_search_sql, current_query, filter_params)
-            for row in curr_results:
-                case_id = row['cmetadata'].get('case_id')
-                if case_id and case_id not in seen_case_ids:
-                    seen_case_ids.add(case_id)
-                    combined_results.append(row)
+            # RRF Hybrid search SQL (Vector Search Top-25 UNION FTS Search Top-25, sorted by RRF Score)
+            hybrid_search_sql = f"""
+                WITH vector_search AS (
+                    SELECT 
+                        e.document, 
+                        e.cmetadata, 
+                        e.embedding <=> {vector_query} AS vector_distance,
+                        0.0::float AS fts_rank,
+                        substring(f.full_text from '"case_name_full":\\s*"([^"]+)"') AS case_name_full,
+                        ROW_NUMBER() OVER (ORDER BY e.embedding <=> {vector_query} ASC) as rank
+                    FROM langchain_pg_embedding e
+                    LEFT JOIN full_cases f ON (e.cmetadata->>'case_id') = f.case_id
+                    WHERE 1=1 {filter_sql.replace('cmetadata', 'e.cmetadata')}
+                    LIMIT 25
+                ),
+                fts_search AS (
+                    SELECT 
+                        e.document, 
+                        e.cmetadata,
+                        1.0::float AS vector_distance,
+                        ts_rank_cd(e.tsvector_doc, plainto_tsquery('english', %s)) AS fts_rank,
+                        substring(f.full_text from '"case_name_full":\\s*"([^"]+)"') AS case_name_full,
+                        ROW_NUMBER() OVER (ORDER BY ts_rank_cd(e.tsvector_doc, plainto_tsquery('english', %s)) DESC) as rank
+                    FROM langchain_pg_embedding e
+                    LEFT JOIN full_cases f ON (e.cmetadata->>'case_id') = f.case_id
+                    WHERE e.tsvector_doc @@ plainto_tsquery('english', %s) {filter_sql.replace('cmetadata', 'e.cmetadata')}
+                    LIMIT 25
+                )
+                SELECT 
+                    coalesce(v.document, f.document) as document,
+                    coalesce(v.cmetadata, f.cmetadata) as cmetadata,
+                    coalesce(v.case_name_full, f.case_name_full) as case_name_full,
+                    coalesce(v.vector_distance, 1.0) as vector_distance,
+                    coalesce(f.fts_rank, 0.0) as fts_rank,
+                    (1.0 / (60.0 + coalesce(v.rank, 999.0)) + 1.0 / (60.0 + coalesce(f.rank, 999.0))) as rrf_score
+                FROM vector_search v
+                FULL OUTER JOIN fts_search f ON (v.cmetadata->>'case_id') = (f.cmetadata->>'case_id')
+                ORDER BY rrf_score DESC
+                LIMIT 15;
+            """
+            
+            params = [current_query, current_query, current_query] + filter_params
+            return fetch_from_postgres(thread_cursor, hybrid_search_sql, params)
         except Exception as e:
-            print(f"Search failed for '{current_query}': {e}")
+            print(f"Search query worker failed for query '{current_query}': {e}")
+            return []
+        finally:
+            thread_cursor.close()
+            thread_conn.close()
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor() as executor:
+        futures = [executor.submit(run_single_query_search, q) for q in queries_to_search]
+        results_lists = [f.result() for f in futures]
+
+    for curr_results in results_lists:
+        for row in curr_results:
+            case_id = row['cmetadata'].get('case_id')
+            if case_id and case_id not in seen_case_ids:
+                seen_case_ids.add(case_id)
+                combined_results.append(row)
 
     # Limit total candidate results for reranking
     results = combined_results[:30]

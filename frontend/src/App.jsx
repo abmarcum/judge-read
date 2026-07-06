@@ -121,6 +121,30 @@ function App() {
   // Full Case Modal State
   const [selectedCase, setSelectedCase] = useState(null);
   const [isCaseLoading, setIsCaseLoading] = useState(false);
+  
+  // Case Reader Accessibility states
+  const [readerFontSize, setReaderFontSize] = useState(15);
+  const [readerFontFamily, setReaderFontFamily] = useState('sans-serif');
+  const [readerLineHeight, setReaderLineHeight] = useState(1.7);
+
+  // Global Option/Alt Tab Navigation Hotkeys
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.altKey) {
+        if (e.key === '1') {
+          setActiveTab('chat');
+        } else if (e.key === '2') {
+          setActiveTab('explorer');
+        } else if (e.key === '3') {
+          setActiveTab('dashboard');
+        } else if (e.key === '4') {
+          setActiveTab('benchmark');
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Settings state
   const [embeddingModel, setEmbeddingModel] = useState('OpenAI:text-embedding-3-small');
@@ -491,6 +515,49 @@ function App() {
     }
   };
 
+  const exportCaseNotes = (scase) => {
+    if (!scase) return;
+    const caseAnnos = annotations.filter(a => a.case_id === scase.case_id);
+    const parsed = scase.full_text ? (() => {
+      try {
+        return JSON.parse(scase.full_text);
+      } catch(e) { return null; }
+    })() : null;
+    
+    const caseName = parsed && parsed.case_name_full ? parsed.case_name_full : scase.name;
+    
+    let md = `# Attorney Case Memo: ${caseName}\n\n`;
+    md += `**Citation**: ${scase.reporter}\n`;
+    md += `**Court**: ${scase.court} (${scase.year})\n`;
+    md += `**Jurisdiction**: ${scase.jurisdiction || 'N/A'}\n`;
+    md += `**Good Law Status**: ${scase.status || 'good_law'}\n\n`;
+    md += `--- \n\n`;
+    md += `## Saved Highlights & Notes (${caseAnnos.length})\n\n`;
+    
+    if (caseAnnos.length === 0) {
+      md += `*No highlights or notes saved for this case yet.*\n`;
+    } else {
+      caseAnnos.forEach((anno, index) => {
+        md += `### Highlight ${index + 1}\n`;
+        md += `> ${anno.highlighted_text}\n\n`;
+        if (anno.note) {
+          md += `**Attorney Note**: ${anno.note}\n\n`;
+        }
+        md += `*Saved on: ${new Date(anno.created_at || Date.now()).toLocaleDateString()}*\n\n`;
+        md += `---\n\n`;
+      });
+    }
+    
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `case_memo_${scase.case_id}.md`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const renderCaseReader = (scase, loading, isSplit) => {
     if (loading) {
       return (
@@ -534,6 +601,14 @@ function App() {
           <div style={{ display: 'flex', gap: '8px' }}>
             <button 
               className="button-icon" 
+              onClick={() => exportCaseNotes(scase)}
+              title="Export Case Notes as Markdown"
+              style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+            >
+              Export Notes
+            </button>
+            <button 
+              className="button-icon" 
               onClick={() => setIsSplitScreen(!isSplitScreen)} 
               title={isSplitScreen ? "Maximize View" : "Split View Mode"}
               style={{ color: isSplitScreen ? 'var(--accent-hover)' : 'inherit', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}
@@ -546,10 +621,93 @@ function App() {
           </div>
         </div>
 
+        {/* Accessibility Typography Controls Bar */}
+        <div style={{ 
+          padding: '8px 24px', 
+          borderBottom: '1px solid var(--border-color)', 
+          display: 'flex', 
+          gap: '20px', 
+          alignItems: 'center', 
+          background: 'rgba(15,20,30,0.5)', 
+          fontSize: '0.78rem',
+          flexWrap: 'wrap'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Font:</span>
+            <button 
+              className="button-icon" 
+              style={{ padding: '2px 8px', fontSize: '0.75rem', fontWeight: readerFontFamily === 'sans-serif' ? 600 : 400, border: readerFontFamily === 'sans-serif' ? '1px solid var(--accent)' : 'none', background: readerFontFamily === 'sans-serif' ? 'rgba(0,180,216,0.1)' : 'transparent' }}
+              onClick={() => setReaderFontFamily('sans-serif')}
+            >
+              Sans
+            </button>
+            <button 
+              className="button-icon" 
+              style={{ padding: '2px 8px', fontSize: '0.75rem', fontFamily: 'Georgia, serif', fontWeight: readerFontFamily === 'serif' ? 600 : 400, border: readerFontFamily === 'serif' ? '1px solid var(--accent)' : 'none', background: readerFontFamily === 'serif' ? 'rgba(0,180,216,0.1)' : 'transparent' }}
+              onClick={() => setReaderFontFamily('serif')}
+            >
+              Serif
+            </button>
+          </div>
+          
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Size:</span>
+            <button 
+              className="button-icon" 
+              style={{ padding: '2px 6px', fontSize: '0.75rem' }} 
+              onClick={() => setReaderFontSize(Math.max(12, readerFontSize - 1))}
+            >
+              A-
+            </button>
+            <span style={{ minWidth: '30px', textAlign: 'center', fontWeight: 600 }}>{readerFontSize}px</span>
+            <button 
+              className="button-icon" 
+              style={{ padding: '2px 6px', fontSize: '0.75rem' }} 
+              onClick={() => setReaderFontSize(Math.min(24, readerFontSize + 1))}
+            >
+              A+
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Spacing:</span>
+            <button 
+              className="button-icon" 
+              style={{ padding: '2px 8px', fontSize: '0.75rem', fontWeight: readerLineHeight === 1.4 ? 600 : 400, border: readerLineHeight === 1.4 ? '1px solid var(--accent)' : 'none', background: readerLineHeight === 1.4 ? 'rgba(0,180,216,0.1)' : 'transparent' }}
+              onClick={() => setReaderLineHeight(1.4)}
+            >
+              Compact
+            </button>
+            <button 
+              className="button-icon" 
+              style={{ padding: '2px 8px', fontSize: '0.75rem', fontWeight: readerLineHeight === 1.7 ? 600 : 400, border: readerLineHeight === 1.7 ? '1px solid var(--accent)' : 'none', background: readerLineHeight === 1.7 ? 'rgba(0,180,216,0.1)' : 'transparent' }}
+              onClick={() => setReaderLineHeight(1.7)}
+            >
+              Normal
+            </button>
+            <button 
+              className="button-icon" 
+              style={{ padding: '2px 8px', fontSize: '0.75rem', fontWeight: readerLineHeight === 2.0 ? 600 : 400, border: readerLineHeight === 2.0 ? '1px solid var(--accent)' : 'none', background: readerLineHeight === 2.0 ? 'rgba(0,180,216,0.1)' : 'transparent' }}
+              onClick={() => setReaderLineHeight(2.0)}
+            >
+              Relaxed
+            </button>
+          </div>
+        </div>
+
         <div 
           className="scroll-smooth" 
           onMouseUp={handleTextSelection}
-          style={{ flex: 1, overflowY: 'auto', padding: '24px', fontSize: '0.95rem', lineHeight: '1.7', color: 'var(--text-main)', position: 'relative' }}
+          style={{ 
+            flex: 1, 
+            overflowY: 'auto', 
+            padding: '24px', 
+            fontSize: `${readerFontSize}px`, 
+            lineHeight: readerLineHeight, 
+            fontFamily: readerFontFamily === 'serif' ? 'Georgia, "Times New Roman", serif' : 'inherit',
+            color: 'var(--text-main)', 
+            position: 'relative' 
+          }}
         >
           {highlightPopover && (
             <div 

@@ -116,9 +116,13 @@ def setup_db():
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS tsvector_doc_idx ON langchain_pg_embedding USING GIN (tsvector_doc);
         """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS langchain_pg_embedding_hnsw_idx 
+            ON langchain_pg_embedding USING hnsw (embedding vector_cosine_ops);
+        """)
         print("Added FTS column and index for Hybrid Search on langchain_pg_embedding.")
     except Exception as e:
-        print("Note: Could not add FTS index. (This is expected if data_pipeline.py hasn't run yet).", e)
+        print("Note: Could not add indices. (This is expected if data_pipeline.py hasn't run yet).", e)
         conn.rollback()
 
     cursor.close()
