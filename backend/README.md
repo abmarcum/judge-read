@@ -128,12 +128,15 @@ uv run python data_pipeline.py --action all --limit 100
 
 Uvicorn hosts the FastAPI REST application:
 ```bash
-uv run uvicorn main:app --reload
+uv run uvicorn main:app --reload --reload-exclude ".venv"
 ```
 * **Host Binding**: By default, the server binds to `127.0.0.1:8000`. To make it accessible over the local network (supporting devices connecting to the frontend on other IPs), bind to `0.0.0.0`:
   ```bash
-  uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+  uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload --reload-exclude ".venv"
   ```
+
+> [!NOTE]
+> **Reloader Performance:** The project includes the `watchfiles` library to enable efficient, OS-native file system event watching for Uvicorn's `--reload` mode. Additionally, using `--reload-exclude ".venv"` explicitly prevents the watcher from traversing/monitoring the large virtual environment directory, ensuring minimal CPU utilization.
 
 ---
 
