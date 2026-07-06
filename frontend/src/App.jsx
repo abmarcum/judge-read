@@ -55,6 +55,16 @@ const getApiUrl = (path) => {
   return `http://${window.location.hostname}:8000${path}`;
 };
 
+const PIPELINE_STEPS = [
+  "🔍 Checking query signature in search cache...",
+  "🔄 Expanding query for semantic search terms...",
+  "🧠 Generating query embeddings...",
+  "📚 Executing PostgreSQL hybrid vector + FTS search...",
+  "🎯 Reranking documents with Cohere...",
+  "⚖️ Simulating Attorney Agent advocacy framing...",
+  "👨‍⚖️ Simulating Judge Agent objective guidance..."
+];
+
 function App() {
   const [query, setQuery] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -128,6 +138,24 @@ function App() {
   const [isBenchmarking, setIsBenchmarking] = useState(false);
   const [highlightPopover, setHighlightPopover] = useState(null); // { x, y, text }
   const [annotationText, setAnnotationText] = useState('');
+
+  const [loadingStep, setLoadingStep] = useState(0);
+
+  useEffect(() => {
+    let interval;
+    if (isLoading) {
+      setLoadingStep(0);
+      interval = setInterval(() => {
+        setLoadingStep(prev => {
+          if (prev < 6) return prev + 1;
+          return prev;
+        });
+      }, 1200);
+    } else {
+      setLoadingStep(0);
+    }
+    return () => clearInterval(interval);
+  }, [isLoading]);
 
   useEffect(() => {
     // Load config on mount
@@ -804,8 +832,43 @@ function App() {
               </div>
             ))}
             {isLoading && (
-              <div className="animate-fade-in" style={{ alignSelf: 'flex-start', padding: '16px 20px', borderRadius: '16px', background: 'var(--panel-bg)', border: '1px solid var(--border-color)' }}>
-                <Loader2 className="spinner" size={20} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent)' }} />
+              <div className="animate-fade-in animate-pulse-subtle" style={{ 
+                alignSelf: 'flex-start', padding: '20px', borderRadius: '16px', 
+                background: 'var(--panel-bg)', border: '1px solid var(--border-color)',
+                width: '320px', display: 'flex', flexDirection: 'column', gap: '12px',
+                boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Loader2 className="spinner" size={16} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent)' }} />
+                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)', letterSpacing: '0.5px' }}>Analyzing Case Precedents...</span>
+                </div>
+                
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
+                  {PIPELINE_STEPS.map((step, idx) => {
+                    let statusColor = 'var(--text-muted)';
+                    let icon = '○';
+                    let opacity = 0.4;
+                    if (idx < loadingStep) {
+                      statusColor = '#10B981'; // Completed (Green)
+                      icon = '✓';
+                      opacity = 1;
+                    } else if (idx === loadingStep) {
+                      statusColor = 'var(--accent-hover)'; // Active
+                      icon = '●';
+                      opacity = 1;
+                    }
+                    return (
+                      <div key={idx} style={{ 
+                        fontSize: '0.75rem', color: statusColor, display: 'flex', 
+                        alignItems: 'center', gap: '8px', fontWeight: idx === loadingStep ? '600' : 'normal',
+                        opacity: opacity, transition: 'all 0.3s'
+                      }}>
+                        <span style={{ fontSize: '0.8rem', width: '12px' }}>{icon}</span>
+                        <span>{step}</span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
             <div ref={messagesEndRef} />
