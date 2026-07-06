@@ -451,6 +451,18 @@ def _run_search_pipeline(req: QueryRequest):
     # Initialize Embedding once
     embeddings = None
     try:
+        # Check for host/key mismatches (URL in OpenAI key field)
+        is_openai_embed = True
+        if ":" in req.embedding_model:
+            provider, actual_model = req.embedding_model.split(":", 1)
+            is_openai_embed = (provider != "Ollama")
+        else:
+            is_openai_embed = (req.embedding_model != "ollama")
+
+        if is_openai_embed and req.embedding_key:
+            if req.embedding_key.startswith("http://") or req.embedding_key.startswith("https://"):
+                raise ValueError(f"Invalid OpenAI API Key format. It seems you provided an Ollama host URL ('{req.embedding_key}') as your OpenAI Key.")
+
         if ":" in req.embedding_model:
             provider, actual_model = req.embedding_model.split(":", 1)
             if provider == "Ollama":
@@ -471,6 +483,7 @@ def _run_search_pipeline(req: QueryRequest):
                 embeddings = OpenAIEmbeddings(model=req.embedding_model)
     except Exception as e:
         print(f"Embedding initialization failed: {e}")
+        raise e
 
     # Build filters once
     filter_sql = ""
