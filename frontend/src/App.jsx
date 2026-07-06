@@ -5,11 +5,23 @@ import ReactMarkdown from 'react-markdown';
 import './index.css';
 
 const LinkifyCitations = ({ content, onResolve }) => {
+  if (!content) return null;
+  
   const citRegex = /\b(\d+)\s+((?:U\.S\.|F\.(?:2d|3d|4th)?|F\.\s*Supp\.(?:2d|3d)?|S\.\s*Ct\.|L\.\s*Ed\.(?:2d)?|A\.(?:2d|3d)?|P\.(?:2d|3d)?|N\.\s*E\.(?:2d)?|N\.\s*W\.(?:2d)?|S\.\s*E\.(?:2d)?|S\.\s*W\.(?:2d)?|So\.(?:2d|3d)?))\s+(\d+)\b/gi;
   
-  const linkifiedContent = content.replace(citRegex, (match) => {
-    return `[${match}](citation://${encodeURIComponent(match)})`;
+  // Split the string by existing markdown citation links to avoid double-processing
+  const parts = content.split(/(\[[^\]]+\]\(citation:\/\/[^\)]+\))/gi);
+  const linkifiedParts = parts.map((part) => {
+    if (part.startsWith('[') && part.includes('](citation://')) {
+      return part; // Return pre-linkified text exactly as is
+    }
+    // Only search/replace within plain text segments
+    return part.replace(citRegex, (match) => {
+      return `[${match}](citation://${encodeURIComponent(match)})`;
+    });
   });
+  
+  const linkifiedContent = linkifiedParts.join('');
   
   return (
     <ReactMarkdown 
@@ -105,6 +117,7 @@ function App() {
   // Advanced Suite State
   const [activeTab, setActiveTab] = useState('chat'); // chat, explorer, dashboard, benchmark
   const [isSplitScreen, setIsSplitScreen] = useState(false);
+  const [expandedStepsIdx, setExpandedStepsIdx] = useState(null);
   const [isBriefUploading, setIsBriefUploading] = useState(false);
   const [uploadedBriefName, setUploadedBriefName] = useState('');
   const [expandQuery, setExpandQuery] = useState(false);
@@ -724,6 +737,41 @@ function App() {
                   lineHeight: '1.6'
                 }}>
                   <LinkifyCitations content={msg.content} onResolve={resolveAndOpenCitation} />
+                  
+                  {msg.role === 'assistant' && msg.steps && msg.steps.length > 0 && (
+                    <div style={{ marginTop: '12px', borderTop: '1px dashed var(--border-color)', paddingTop: '12px' }}>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExpandedStepsIdx(expandedStepsIdx === idx ? null : idx);
+                        }}
+                        style={{
+                          background: 'none', border: 'none', color: 'var(--accent-hover)',
+                          fontSize: '0.8rem', cursor: 'pointer', display: 'flex', alignItems: 'center',
+                          gap: '6px', padding: 0, fontWeight: 500, transition: 'color 0.2s'
+                        }}
+                        className="hover-underline"
+                      >
+                        <span>{expandedStepsIdx === idx ? '▼ Hide Backend Pipeline Trace' : '▶ Show Backend Pipeline Trace'}</span>
+                      </button>
+                      
+                      {expandedStepsIdx === idx && (
+                        <div className="animate-fade-in" style={{
+                          marginTop: '10px', padding: '12px', background: 'rgba(0,0,0,0.2)',
+                          borderRadius: '8px', border: '1px solid var(--border-color)',
+                          fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--text-muted)',
+                          display: 'flex', flexDirection: 'column', gap: '6px', textAlign: 'left'
+                        }}>
+                          {msg.steps.map((step, sIdx) => (
+                            <div key={sIdx} style={{ display: 'flex', gap: '8px' }}>
+                              <span style={{ color: 'var(--accent)' }}>•</span>
+                              <span>{step}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
                 
                 {msg.sources && msg.sources.length > 0 && (
@@ -1155,7 +1203,8 @@ function App() {
         role: 'assistant',
         content: response.data.answer,
         sources: response.data.sources,
-        cached: response.data.cached
+        cached: response.data.cached,
+        steps: response.data.steps
       }]);
     } catch (error) {
       setMessages(prev => [...prev, {
@@ -1427,7 +1476,7 @@ function App() {
       </div>
 
       {/* Dynamic View container supporting Split Screen and standard modes */}
-      {isSplitScreen && selectedCase ? (
+      {isSplitScreen && (selectedCase || isCaseLoading) ? (
         <div className="split-workspace animate-fade-in" style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden' }}>
           {/* Left Column: Interactive Tab Workspace */}
           <div className="split-chat-pane">

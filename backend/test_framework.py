@@ -107,7 +107,7 @@ def test_database(host, port, user, password, dbname):
             success = False
 
         # Tables Check
-        tables_to_check = ["full_cases", "langchain_pg_embedding", "chat_messages"]
+        tables_to_check = ["full_cases", "langchain_pg_embedding", "chat_messages", "search_cache"]
         cursor.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';")
         existing_tables = [row[0] for row in cursor.fetchall()]
         missing_tables = [t for t in tables_to_check if t not in existing_tables]
@@ -199,6 +199,95 @@ def test_mcp_server():
         
     return success
 
+def test_search_pipeline_features(host, port=8000):
+    success = True
+    base_url = f"http://{host}:{port}/api/search"
+    
+    # We will send a test search request
+    payload = {
+        "query": f"test case prior art obviousness {time.time()}",
+        "username": "diagnostics_test_user",
+        "llm_engine": "OpenAI:gpt-5.5-pro",
+        "openai_api_key": "sk-mock-key", # The server handles fallbacks or mocks if config key is active
+        "embedding_model": "Ollama:nomic-embed-text",
+        "embedding_key": "http://localhost:11434",
+        "cohere_key": "",
+        "expand_query": False
+    }
+    
+    # Load valid keys from config.json if they exist
+    config_path = os.path.join(os.path.dirname(__file__), "config.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r") as f:
+                cfg = json.load(f)
+                payload["openai_api_key"] = cfg.get("openaiApiKey", payload["openai_api_key"])
+                payload["embedding_key"] = cfg.get("embeddingKey", payload["embedding_key"])
+                payload["embedding_model"] = cfg.get("embeddingModel", payload["embedding_model"])
+        except Exception:
+            pass
+
+    # First request: Cache Miss
+    try:
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(base_url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+        
+        step_start = time.time()
+        response = urllib.request.urlopen(req, timeout=30)
+        duration = time.time() - step_start
+        
+        if response.getcode() == 200:
+            res_payload = json.loads(response.read().decode('utf-8'))
+            
+            # Verify fields
+            has_answer = "answer" in res_payload
+            has_steps = "steps" in res_payload and isinstance(res_payload["steps"], list)
+            has_cached = "cached" in res_payload
+            
+            if has_answer and has_steps and has_cached:
+                print_result(f"Search API Pipeline Miss Check ({duration:.1f}s)", True)
+                print_result("Search Response Trace Steps Returned", True, f"({len(res_payload['steps'])} trace logs found)")
+                
+                # Check for agent steps
+                has_agents = any("Attorney Agent" in step or "Judge Agent" in step for step in res_payload["steps"])
+                print_result("Attorney/Judge Multi-Agent Trace Logged", has_agents)
+            else:
+                print_result("Search API Pipeline Miss Check", False, "(Missing payload fields)")
+                success = False
+                return False
+                
+            # Second request: Cache Hit Check
+            step_start = time.time()
+            # Send same query again
+            response_hit = urllib.request.urlopen(req, timeout=10)
+            duration_hit = time.time() - step_start
+            
+            if response_hit.getcode() == 200:
+                res_payload_hit = json.loads(response_hit.read().decode('utf-8'))
+                is_cached = res_payload_hit.get("cached") == True
+                
+                if is_cached:
+                    print_result(f"Search API Pipeline Caching Hit Check ({duration_hit * 1000:.1f}ms)", True)
+                    
+                    has_cache_step = any("Cache check: HIT" in s for s in res_payload_hit.get("steps", []))
+                    print_result("Pipeline Cache HIT Trace Logged", has_cache_step)
+                else:
+                    print_result("Search API Pipeline Caching Hit Check", False, "(Returned cached=False on repeat query)")
+                    success = False
+            else:
+                print_result("Search API Pipeline Caching Hit Check", False, f"(HTTP {response_hit.getcode()})")
+                success = False
+                
+        else:
+            print_result("Search API Pipeline Integration Test", False, f"(HTTP {response.getcode()})")
+            success = False
+    except Exception as e:
+        print_result("Search API Pipeline Integration Test", False, f"({e})")
+        success = False
+        
+    return success
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Advanced Diagnostic Tests for Judge Read")
     parser.add_argument("--ui-ip", type=str, help="IP address of the Frontend UI")
@@ -238,6 +327,10 @@ if __name__ == "__main__":
     backend_ok = test_backend(host=backend_host)
     print("-" * 75)
     
+    # Run new pipeline features tests (Cache hits & trace logs steps)
+    pipeline_features_ok = test_search_pipeline_features(host=backend_host)
+    print("-" * 75)
+    
     ollama_ok = test_ollama(config)
     print("-" * 75)
     
@@ -247,7 +340,7 @@ if __name__ == "__main__":
     database_ok = test_database(host=db_host, port=db_port, user=db_user, password=db_pass, dbname=db_name)
     
     print("="*75)
-    if frontend_ok and backend_ok and database_ok and ollama_ok and mcp_ok:
+    if frontend_ok and backend_ok and pipeline_features_ok and database_ok and ollama_ok and mcp_ok:
         print("🎉 ALL TESTS PASSED! Your full stack is online and fully functional.")
         sys.exit(0)
     else:

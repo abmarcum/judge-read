@@ -1,4 +1,8 @@
 import os
+import warnings
+# Suppress LangChain deprecation warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 import argparse
 import requests
 import tarfile
@@ -124,15 +128,58 @@ def embed_data(db_url, embed_provider, embed_model, embed_key, embed_host, limit
     raw_documents = []
     full_cases_to_insert = []
 
+    import urllib.parse
+
     def clean_html_text(html_content):
         if not html_content:
             return ""
         try:
-            # BeautifulSoup cleaning specifically for target HTML tags
+            if "<" not in str(html_content) or ">" not in str(html_content):
+                return str(html_content).strip()
+                
             soup = BeautifulSoup(str(html_content), "html.parser")
-            return soup.get_text(separator="\n", strip=True)
+            
+            for tag in soup.find_all(["p", "div"]):
+                tag.insert_before("\n\n")
+                tag.insert_after("\n\n")
+                
+            for br in soup.find_all("br"):
+                br.replace_with("\n")
+                
+            for h in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
+                level = h.name[1]
+                h.replace_with(f"\n\n{'#' * int(level)} {h.get_text().strip()}\n\n")
+                
+            for b in soup.find_all(["b", "strong"]):
+                b.replace_with(f" **{b.get_text().strip()}** ")
+                
+            for i in soup.find_all(["i", "em"]):
+                i.replace_with(f" *{i.get_text().strip()}* ")
+                
+            for blockquote in soup.find_all("blockquote"):
+                inner_text = blockquote.get_text().strip().replace("\n", "\n> ")
+                blockquote.replace_with(f"\n\n> {inner_text}\n\n")
+                
+            text = soup.get_text()
+            text = re.sub(r'\n{3,}', '\n\n', text)
+            lines = [line.strip() for line in text.split("\n")]
+            return "\n".join(lines).strip()
         except Exception:
-            return str(html_content)
+            return str(html_content).strip()
+
+    def linkify_citations(text):
+        if not text:
+            return ""
+        # Regex to match case law citations like "347 U.S. 483"
+        cit_regex = re.compile(
+            r'\b(\d+)\s+((?:U\.S\.|F\.(?:2d|3d|4th)?|F\.\s*Supp\.(?:2d|3d)?|S\.\s*Ct\.|L\.\s*Ed\.(?:2d)?|A\.(?:2d|3d)?|P\.(?:2d|3d)?|N\.\s*E\.(?:2d)?|N\.\s*W\.(?:2d)?|S\.\s*E\.(?:2d)?|S\.\s*W\.(?:2d)?|So\.(?:2d|3d)?))\s+(\d+)\b',
+            re.IGNORECASE
+        )
+        def replace_match(match):
+            full_match = match.group(0)
+            encoded = urllib.parse.quote(full_match)
+            return f"[{full_match}](citation://{encoded})"
+        return cit_regex.sub(replace_match, text)
 
     def determine_status(text):
         if not text:
@@ -254,7 +301,7 @@ def embed_data(db_url, embed_provider, embed_model, embed_key, embed_host, limit
 
             for op in opinions_raw:
                 op_text = op.get("opinion_text") or op.get("text") or op.get("plain_text") or op.get("html") or op.get("html_lawbox") or op.get("html_columbia") or op.get("html_with_citations") or op.get("text_plain") or ""
-                op_text = clean_html_text(op_text)
+                op_text = linkify_citations(clean_html_text(op_text))
                 opinion_texts.append(op_text)
                 opinions.append({
                     "author_str": op.get("author_str") or op.get("author") or "Court",
@@ -267,22 +314,22 @@ def embed_data(db_url, embed_provider, embed_model, embed_key, embed_host, limit
                 if isinstance(cb, dict) and "data" in cb:
                     cb_data = cb["data"]
                     if isinstance(cb_data, dict) and "opinions" in cb_data:
-                        opinions_raw = cb_data["opinions"]
-                        for op in opinions_raw:
-                            op_text = op.get("opinion_text") or op.get("text") or ""
-                            op_text = clean_html_text(op_text)
-                            opinion_texts.append(op_text)
-                            opinions.append({
-                                "author_str": op.get("author_str") or op.get("author") or "Court",
-                                "download_url": "",
-                                "opinion_text": op_text
-                            })
+                          opinions_raw = cb_data["opinions"]
+                          for op in opinions_raw:
+                              op_text = op.get("opinion_text") or op.get("text") or ""
+                              op_text = linkify_citations(clean_html_text(op_text))
+                              opinion_texts.append(op_text)
+                              opinions.append({
+                                  "author_str": op.get("author_str") or op.get("author") or "Court",
+                                  "download_url": "",
+                                  "opinion_text": op_text
+                              })
 
             if not opinions:
                 for k in ["opinion_text", "text", "plain_text", "html", "body", "case_text"]:
                     val = data.get(k)
                     if val and isinstance(val, str):
-                        op_text = clean_html_text(val)
+                        op_text = linkify_citations(clean_html_text(val))
                         opinion_texts.append(op_text)
                         opinions.append({
                             "author_str": "Court",
@@ -292,10 +339,10 @@ def embed_data(db_url, embed_provider, embed_model, embed_key, embed_host, limit
                         break
 
             full_opinions_text = "\n\n".join(opinion_texts)
-            summary = clean_html_text(data.get("summary") or "")
-            syllabus = clean_html_text(data.get("syllabus") or "")
-            headnotes = clean_html_text(data.get("headnotes") or "")
-            headmatter = clean_html_text(data.get("headmatter") or "")
+            summary = linkify_citations(clean_html_text(data.get("summary") or ""))
+            syllabus = linkify_citations(clean_html_text(data.get("syllabus") or ""))
+            headnotes = linkify_citations(clean_html_text(data.get("headnotes") or ""))
+            headmatter = linkify_citations(clean_html_text(data.get("headmatter") or ""))
             
             judges = data.get("judges") or ""
             if isinstance(judges, list):
@@ -343,7 +390,7 @@ def embed_data(db_url, embed_provider, embed_model, embed_key, embed_host, limit
                 print(f"Error reading {path}: {e}")
                 continue
 
-            cleaned_content = clean_html_text(raw_content)
+            cleaned_content = linkify_citations(clean_html_text(raw_content))
             name = f"Case {case_id}"
             reporter = f"Unpublished Case {case_id}"
             court = random.choice(FEDERAL_COURTS + STATE_COURTS)
@@ -500,10 +547,10 @@ def main():
     parser = argparse.ArgumentParser(description="Judge Read Data Pipeline")
     parser.add_argument("--action", choices=["download", "embed", "all"], default="all",
                         help="Action to perform (default: all)")
-    parser.add_argument("--source", choices=["hf", "courtlistener"], default="hf",
+    parser.add_argument("--source", choices=["hf", "courtlistener", "both"], default="hf",
                         help="Data source for download (default: hf)")
-    parser.add_argument("--limit", type=int, default=None,
-                        help="Only download/extract the first N cases. Omit to download all.")
+    parser.add_argument("--limit", type=str, default=None,
+                        help="Only download/extract the first N cases. Use 'all' or omit to download all.")
     parser.add_argument("--all-cases", action="store_true",
                         help="Explicitly download and process ALL cases (overrides --limit). Warning: 8+ million cases, 40GB+.")
                         
@@ -534,12 +581,44 @@ def main():
         os.environ.setdefault("LANGCHAIN_PROJECT", "Judge_Read_Pipeline")
         print("🔍 LangSmith Tracing Enabled")
 
-    # Construct the fallback connection string from CLI args
-    cli_db_url = f"postgresql+psycopg2://{args.pg_user}:{args.pg_password}@{args.pg_host}:{args.pg_port}/{args.pg_db}"
+    # Load config defaults if config.json exists
+    config_path = os.path.join(os.path.dirname(__file__), "config.json")
+    pg_host = args.pg_host
+    pg_port = args.pg_port
+    pg_user = args.pg_user
+    pg_password = args.pg_password
+    pg_db = args.pg_db
+
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r") as f:
+                cfg = json.load(f)
+                # If argument is default, prioritize config value
+                if args.pg_host == "localhost" and cfg.get("pgHost"):
+                    pg_host = cfg["pgHost"]
+                if args.pg_port == "5432" and cfg.get("pgPort"):
+                    pg_port = cfg["pgPort"]
+                if args.pg_user == "user" and cfg.get("pgUser"):
+                    pg_user = cfg["pgUser"]
+                if args.pg_password == "password" and cfg.get("pgPassword"):
+                    pg_password = cfg["pgPassword"]
+                if args.pg_db == "judgeread" and cfg.get("pgDb"):
+                    pg_db = cfg["pgDb"]
+                
+                # Also load Ollama host and OpenAI key defaults
+                if args.embed_host == "http://localhost:11434" and cfg.get("ollamaHost"):
+                    args.embed_host = cfg["ollamaHost"]
+                if args.embed_key == os.getenv("OPENAI_API_KEY") and cfg.get("openaiApiKey"):
+                    args.embed_key = cfg["openaiApiKey"]
+        except Exception:
+            pass
+
+    # Construct the fallback connection string
+    cli_db_url = f"postgresql+psycopg2://{pg_user}:{pg_password}@{pg_host}:{pg_port}/{pg_db}"
     # Prefer DATABASE_URL env var if set, otherwise fallback to CLI
     db_url = os.getenv("DATABASE_URL", cli_db_url)
     
-    print(f"Testing connection to PostgreSQL database at {args.pg_host}:{args.pg_port}...")
+    print(f"Testing connection to PostgreSQL database at {pg_host}:{pg_port}...")
     try:
         import psycopg2
         db_url_clean = db_url.replace("+psycopg2", "")
@@ -562,7 +641,7 @@ def main():
             tables_to_drop = [
                 "langchain_pg_embedding", "langchain_pg_collection",
                 "chat_messages", "chat_sessions", "analytics_queries",
-                "case_annotations", "full_cases"
+                "case_annotations", "full_cases", "search_cache"
             ]
             for table in tables_to_drop:
                 cursor.execute(f"DROP TABLE IF EXISTS {table} CASCADE;")
@@ -575,17 +654,29 @@ def main():
             print(f"❌ Failed to drop existing tables: {e}")
             return
 
-    if args.action in ["download", "all"]:
-        # If the user passed --all-cases, force the limit to None
-        actual_limit = None if args.all_cases else args.limit
-        
-        if args.source == "hf":
-            download_huggingface(limit=actual_limit)
+    # Parse actual limit (int or None)
+    actual_limit = None
+    if args.limit:
+        if isinstance(args.limit, str) and args.limit.lower() in ["all", "none"]:
+            actual_limit = None
         else:
+            try:
+                actual_limit = int(args.limit)
+            except ValueError:
+                print(f"Warning: Invalid limit value '{args.limit}'. Defaulting to all.")
+                actual_limit = None
+    if args.all_cases:
+        actual_limit = None
+
+    if args.action in ["download", "all"]:
+        if args.source in ["hf", "both"]:
+            print("Downloading from HuggingFace dataset source...")
+            download_huggingface(limit=actual_limit)
+        if args.source in ["courtlistener", "both"]:
+            print("Downloading from CourtListener dataset source...")
             download_courtlistener(limit=actual_limit)
             
     if args.action in ["embed", "all"]:
-        actual_limit = None if args.all_cases else args.limit
         embed_data(db_url, args.embed_provider, args.embed_model, args.embed_key, args.embed_host, limit=actual_limit)
 
 if __name__ == "__main__":

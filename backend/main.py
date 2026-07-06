@@ -57,6 +57,7 @@ class QueryResponse(BaseModel):
     sources: list
     session_id: str
     cached: Optional[bool] = False
+    steps: Optional[list] = []
 
 class ConfigModel(BaseModel):
     embeddingModel: Optional[str] = "text-embedding-3-small"
@@ -144,11 +145,21 @@ def fetch_from_postgres(cursor, hybrid_search_sql, query, filter_params):
         return cursor.fetchall()
     except Exception as e:
         print(f"Hybrid search failed, maybe tables aren't setup: {e}")
-        cursor.connection.rollback()
-        return []
+def _extract_response_text(response) -> str:
+    if not response:
+        return ""
+    if isinstance(response.content, list):
+        return "\n".join(
+            b.get("text", "") if isinstance(b, dict) else str(b) 
+            for b in response.content
+        )
+    elif isinstance(response.content, dict):
+        return response.content.get("text", str(response.content))
+    else:
+        return str(response.content)
 
 @traceable(name="llm_generation", run_type="llm")
-def generate_answer(llm_engine: str, openai_key: str, anthropic_key: str, ollama_host: str, sources: list, cursor, session_id: int):
+def generate_answer(llm_engine: str, openai_key: str, anthropic_key: str, ollama_host: str, sources: list, cursor, session_id: int, steps_run: list = None):
     # Fetch chat history
     cursor.execute("SELECT role, content FROM chat_messages WHERE session_id = %s ORDER BY created_at ASC", (session_id,))
     history_rows = cursor.fetchall()
@@ -201,18 +212,65 @@ CONTEXT:
             else:
                 llm = ChatOpenAI(model=actual_model, api_key=openai_key)
             
+        # Step 1: Initial LLM response
+        step_start = time.time()
         response = llm.invoke(messages)
+        initial_answer = _extract_response_text(response)
+        duration_ms = (time.time() - step_start) * 1000
+        if steps_run is not None:
+            steps_run.append(f"📄 Initial Base Answer: Generated objective content ({duration_ms:.1f}ms)")
         
-        # Anthropic and some other models might return a list of dicts for message blocks
-        if isinstance(response.content, list):
-            return "\n".join(
-                b.get("text", "") if isinstance(b, dict) else str(b) 
-                for b in response.content
-            )
-        elif isinstance(response.content, dict):
-            return response.content.get("text", str(response.content))
-        else:
-            return str(response.content)
+        # Step 2: Attorney Agent (Lawyer Agent)
+        step_start = time.time()
+        attorney_prompt = f"""You are a senior litigation attorney representing a client.
+Your task is to take the initial objective search response, review the provided case context, and rewrite/modify the response from an advocate's perspective. 
+Strengthen the legal framing, emphasize the precedents in context that favor your client's posture, highlight strategic legal options, and point out any negative precedent risks.
+
+RETRIVED CASE CONTEXT:
+{context_text}
+
+INITIAL OBJECTIVE RESPONSE:
+{initial_answer}
+
+Produce a revised response written from a professional attorney's viewpoint.
+"""
+        attorney_msg = [
+            SystemMessage(content="You are a senior litigation attorney."),
+            HumanMessage(content=attorney_prompt)
+        ]
+        print("⚖️ Invoking Attorney Agent...")
+        attorney_response = llm.invoke(attorney_msg)
+        attorney_answer = _extract_response_text(attorney_response)
+        duration_ms = (time.time() - step_start) * 1000
+        if steps_run is not None:
+            steps_run.append(f"⚖️ Attorney Agent: Framed response from client advocate's perspective ({duration_ms:.1f}ms)")
+
+        # Step 3: Judge Agent
+        step_start = time.time()
+        judge_prompt = f"""You are a federal judge writing an opinion.
+Your task is to take the attorney agent's legal arguments and the raw case context, and draft the final, authoritative, balanced, and objective answer.
+Correct any one-sided bias from the attorney, ensure all legal citations are applied accurately, reject legal hyperbole, and structure the final response as a clear, balanced judicial guidance.
+
+RETRIVED CASE CONTEXT:
+{context_text}
+
+ATTORNEY'S ADVOCACY RESPONSE:
+{attorney_answer}
+
+Produce the final response written from a judge's objective, authoritative viewpoint.
+"""
+        judge_msg = [
+            SystemMessage(content="You are an objective federal judge."),
+            HumanMessage(content=judge_prompt)
+        ]
+        print("👨‍⚖️ Invoking Judge Agent...")
+        judge_response = llm.invoke(judge_msg)
+        final_answer = _extract_response_text(judge_response)
+        duration_ms = (time.time() - step_start) * 1000
+        if steps_run is not None:
+            steps_run.append(f"👨‍⚖️ Judge Agent: Refined response to be balanced and authoritative ({duration_ms:.1f}ms)")
+        
+        return final_answer
             
     except Exception as e:
         print(f"LLM Generation failed: {e}")
@@ -289,6 +347,10 @@ def _get_cache_hash(req: QueryRequest) -> str:
 
 @traceable(name="judge_read_search_pipeline", run_type="chain")
 def _run_search_pipeline(req: QueryRequest):
+    import time
+    pipeline_start = time.time()
+    steps_run = []
+
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     
@@ -303,6 +365,7 @@ def _run_search_pipeline(req: QueryRequest):
     cache_hash = _get_cache_hash(req)
     
     # Check cache
+    step_start = time.time()
     try:
         cursor.execute("""
             SELECT response_answer, response_sources 
@@ -325,23 +388,37 @@ def _run_search_pipeline(req: QueryRequest):
             
             print(f"✅ Cache HIT for query: '{req.query}'")
             
+            duration_ms = (time.time() - step_start) * 1000
+            steps_run.append(f"🔍 Cache check: HIT (Instant retrieval, {duration_ms:.1f}ms)")
+            total_ms = (time.time() - pipeline_start) * 1000
+            steps_run.append(f"🏁 Execution Finished: Total query pipeline time ({total_ms:.1f}ms)")
+            
             cursor.close()
             conn.close()
-            return QueryResponse(answer=cached_answer, sources=cached_sources, session_id=session_id, cached=True)
+            return QueryResponse(answer=cached_answer, sources=cached_sources, session_id=session_id, cached=True, steps=steps_run)
     except Exception as cache_err:
         print(f"Warning: Cache check failed: {cache_err}")
         conn.rollback()
         
+    duration_ms = (time.time() - step_start) * 1000
+    steps_run.append(f"🔍 Cache check: MISS (Direct generation required, {duration_ms:.1f}ms)")
+
     # Save user message to Chat History (if cache missed)
     cursor.execute("INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)", 
                    (session_id, 'user', req.query))
     conn.commit()
     
+    # Query Expansion Step
+    step_start = time.time()
     queries_to_search = [req.query]
     if req.expand_query:
         expanded = _expand_query(req.query, req.llm_engine, req.openai_api_key, req.anthropic_api_key, req.ollama_host)
         print(f"Query Expansion triggered. Expanded queries: {expanded}")
         queries_to_search.extend(expanded)
+        duration_ms = (time.time() - step_start) * 1000
+        steps_run.append(f"🔄 Query Expansion: Generated 3 search variations ({duration_ms:.1f}ms)")
+    else:
+        steps_run.append("🔄 Query Expansion: Skipped (Using raw search query)")
 
     # Initialize Embedding once
     embeddings = None
@@ -404,6 +481,21 @@ def _run_search_pipeline(req: QueryRequest):
             print(f"Embedding failed for '{current_query}': {e}")
             query_embedding = [0.0] * 1536 if "Ollama" not in req.embedding_model and "ollama" not in req.embedding_model else [0.0] * 768
 
+    # Embeddings & Database lookup step
+    step_start = time.time()
+    combined_results = []
+    seen_case_ids = set()
+
+    for current_query in queries_to_search:
+        try:
+            if embeddings:
+                query_embedding = embeddings.embed_query(current_query)
+            else:
+                raise ValueError("No embeddings object initialized")
+        except Exception as e:
+            print(f"Embedding failed for '{current_query}': {e}")
+            query_embedding = [0.0] * 1536 if "Ollama" not in req.embedding_model and "ollama" not in req.embedding_model else [0.0] * 768
+
         vector_query = f"'[{','.join(map(str, query_embedding))}]'"
         
         hybrid_search_sql = f"""
@@ -421,7 +513,6 @@ def _run_search_pipeline(req: QueryRequest):
         """
         
         try:
-            # Pass the current query to plainto_tsquery
             curr_results = fetch_from_postgres(cursor, hybrid_search_sql, current_query, filter_params)
             for row in curr_results:
                 case_id = row['cmetadata'].get('case_id')
@@ -433,8 +524,11 @@ def _run_search_pipeline(req: QueryRequest):
 
     # Limit total candidate results for reranking
     results = combined_results[:30]
+    duration_ms = (time.time() - step_start) * 1000
+    steps_run.append(f"🧠 Embeddings & DB Hybrid Search: Encoded queries and queried PostgreSQL ({duration_ms:.1f}ms)")
 
     # Cohere Reranking
+    step_start = time.time()
     if req.cohere_key and len(results) > 0:
         @traceable(name="cohere_rerank", run_type="retriever")
         def _perform_cohere_rerank(query: str, docs: list[str], api_key: str):
@@ -455,12 +549,16 @@ def _run_search_pipeline(req: QueryRequest):
             for r in rerank_response.results:
                 reranked_results.append(results[r.index])
             results = reranked_results
+            duration_ms = (time.time() - step_start) * 1000
+            steps_run.append(f"🎯 Cohere Rerank: Reduced candidates to top 5 ({duration_ms:.1f}ms)")
             print(f"Successfully reranked {len(documents)} docs down to {len(results)} using Cohere.")
         except Exception as e:
             print(f"Cohere reranking failed: {e}")
             results = results[:5]
+            steps_run.append("🎯 Cohere Rerank: Failed fallback to top 5")
     else:
         results = results[:5]
+        steps_run.append("🎯 Cohere Rerank: Skipped (Cohere API key not set or no results)")
 
     # Format sources and extract Citator / Overruled status
     sources = []
@@ -491,7 +589,7 @@ def _run_search_pipeline(req: QueryRequest):
     conn.commit()
 
     # Generate Answer using LLM
-    answer = generate_answer(req.llm_engine, req.openai_api_key, req.anthropic_api_key, req.ollama_host, sources, cursor, session_id)
+    answer = generate_answer(req.llm_engine, req.openai_api_key, req.anthropic_api_key, req.ollama_host, sources, cursor, session_id, steps_run=steps_run)
     
     # Save Assistant message
     cursor.execute("INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)", 
@@ -511,10 +609,13 @@ def _run_search_pipeline(req: QueryRequest):
         print(f"Warning: Failed to save to cache: {cache_save_err}")
         conn.rollback()
 
+    total_ms = (time.time() - pipeline_start) * 1000
+    steps_run.append(f"🏁 Execution Finished: Total query pipeline time ({total_ms:.1f}ms)")
+
     cursor.close()
     conn.close()
 
-    return QueryResponse(answer=answer, sources=sources, session_id=session_id, cached=False)
+    return QueryResponse(answer=answer, sources=sources, session_id=session_id, cached=False, steps=steps_run)
 
 @app.get("/api/sessions/{session_id}/history")
 def get_chat_history(session_id: str):
