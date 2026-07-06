@@ -81,9 +81,9 @@ The pipeline downloads bulk legal datasets, parses structured formats, cleans te
 * **Embedding Payload Optimization**: Embeds and chunks the **clean plain-text representation** of the legal opinions instead of the raw JSON string, ensuring vector searches capture legal definitions without JSON tags and brackets.
 * **Standardized JSON Database Storage**: Serializes cleaned fields back to the `full_cases.full_text` database column, aligning with React viewer expectations.
 
-> [!IMPORTANT]
-> **Database Credentials Note**: `data_pipeline.py` does **not** read `config.json` database settings. It defaults to `localhost` with user `user`.
-> If your database is hosted on a custom port/IP (such as `192.168.1.178`), you **must** supply connection credentials via CLI flags or the `DATABASE_URL` environment variable.
+> [!TIP]
+> **Database Credentials Loading**: `data_pipeline.py` automatically reads database settings, credentials, and model API keys/URLs directly from `config.json` by default!
+> You only need to supply connection credentials via CLI flags (e.g. `--pg-host`, `--pg-user`) or the `DATABASE_URL` environment variable if you want to override the default configuration stored in `config.json`.
 
 ### Ingestion Examples
 
