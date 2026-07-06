@@ -136,7 +136,19 @@ def search_cases(req: QueryRequest):
         # Prevent leaking previous request's traces if no key provided
         del os.environ["LANGCHAIN_TRACING_V2"]
         
-    return _run_search_pipeline(req)
+    try:
+        return _run_search_pipeline(req)
+    except Exception as e:
+        print(f"Error in search pipeline: {e}")
+        import traceback
+        traceback.print_exc()
+        return QueryResponse(
+            answer=f"I encountered an error connecting to the retrieval system: {e}\n\nPlease check your backend and model configuration.",
+            sources=[],
+            session_id=req.session_id or "error",
+            cached=False,
+            steps=[f"❌ Pipeline Error: {e}"]
+        )
 
 @traceable(name="postgres_hybrid_search", run_type="retriever")
 def fetch_from_postgres(cursor, hybrid_search_sql, query, filter_params):
@@ -145,6 +157,12 @@ def fetch_from_postgres(cursor, hybrid_search_sql, query, filter_params):
         return cursor.fetchall()
     except Exception as e:
         print(f"Hybrid search failed, maybe tables aren't setup: {e}")
+        try:
+            cursor.connection.rollback()
+        except Exception:
+            pass
+        return []
+
 def _extract_response_text(response) -> str:
     if not response:
         return ""
