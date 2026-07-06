@@ -142,10 +142,20 @@ def search_cases(req: QueryRequest):
         print(f"Error in search pipeline: {e}")
         import traceback
         traceback.print_exc()
+        import uuid
+        fallback_session_id = req.session_id
+        if not fallback_session_id:
+            fallback_session_id = str(uuid.uuid4())
+        else:
+            try:
+                uuid.UUID(str(req.session_id))
+            except ValueError:
+                fallback_session_id = str(uuid.uuid4())
+
         return QueryResponse(
             answer=f"I encountered an error connecting to the retrieval system: {e}\n\nPlease check your backend and model configuration.",
             sources=[],
-            session_id=req.session_id or "error",
+            session_id=fallback_session_id,
             cached=False,
             steps=[f"❌ Pipeline Error: {e}"]
         )
@@ -943,6 +953,12 @@ def resolve_citations(req: CitationResolveRequest):
 
 @app.get("/api/sessions/{session_id}/annotations")
 def get_annotations(session_id: str):
+    import uuid
+    try:
+        uuid.UUID(str(session_id))
+    except ValueError:
+        return {"annotations": []}
+
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
@@ -963,6 +979,12 @@ def get_annotations(session_id: str):
 
 @app.post("/api/sessions/{session_id}/annotations")
 def create_annotation(session_id: str, anno: AnnotationCreate):
+    import uuid
+    try:
+        uuid.UUID(str(session_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session UUID format")
+
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
