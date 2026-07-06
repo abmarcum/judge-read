@@ -166,8 +166,18 @@ def generate_answer(llm_engine: str, openai_key: str, anthropic_key: str, ollama
     
     messages = []
     
+    # Filter sources to only include good law cases
+    good_sources = []
+    for s in sources:
+        if s.get('status') == 'good_law':
+            good_sources.append(s)
+        else:
+            print(f"⚠️ Excluding case '{s['name']}' from LLM response context because its status is '{s['status']}'.")
+            if steps_run is not None:
+                steps_run.append(f"⚠️ Safety Filter: Excluded non-good law case '{s['name']}'")
+
     # System Prompt with Context
-    context_text = "\n\n".join([f"CASE {i+1}: {s['name']} ({s['reporter']})\nSTATUS: {s['status']}\nTEXT: {s['text']}" for i, s in enumerate(sources)])
+    context_text = "\n\n".join([f"CASE {i+1}: {s['name']} ({s['reporter']})\nSTATUS: {s['status']}\nTEXT: {s['text']}" for i, s in enumerate(good_sources)])
     sys_prompt = f"""You are 'Judge Read', an expert AI legal assistant.
 You will be provided with retrieved US case law. Answer the user's legal question based ONLY on these cases.
 If a case is OVERRULED, you MUST mention that it is no longer good law and should not be relied upon.
@@ -274,7 +284,7 @@ Produce the final response written from a judge's objective, authoritative viewp
             
     except Exception as e:
         print(f"LLM Generation failed: {e}")
-        return f"Error communicating with LLM ({llm_engine}): {e}\n\nFallback Answer: Found {len(sources)} cases."
+        return f"Error communicating with LLM ({llm_engine}): {e}\n\nFallback Answer: Found {len(good_sources)} cases."
 
 def _expand_query(query: str, llm_engine: str, openai_key: str, anthropic_key: str, ollama_host: str) -> list[str]:
     system_prompt = "You are a legal research assistant. Expand the user's search query into 3 distinct, search-engine friendly legal search queries (combining key legal concepts, keywords, or potential search terms). Return ONLY the 3 queries, one per line, with no labels, numbers, or bullet points."
