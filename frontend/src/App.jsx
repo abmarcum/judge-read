@@ -101,7 +101,7 @@ function App() {
   const [filterCourt, setFilterCourt] = useState('');
   const [filterSystem, setFilterSystem] = useState('');
   const [filterState, setFilterState] = useState('');
-  const [filterStatus, setFilterStatus] = useState('');
+  const [filterStatus, setFilterStatus] = useState('good_law');
   const [filterJudge, setFilterJudge] = useState('');
   const [filterTopic, setFilterTopic] = useState('');
   
@@ -1394,15 +1394,20 @@ function App() {
         style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', flex: 1, minWidth: '120px' }}
       />
 
-      <select 
-        className="input-glass" 
-        value={filterStatus} 
-        onChange={(e) => setFilterStatus(e.target.value)}
-        style={{ padding: '8px 16px', borderRadius: '20px', fontSize: '0.85rem', background: 'rgba(255,255,255,0.05)', color: filterStatus === 'good_law' ? '#51cf66' : 'inherit', flex: 1, minWidth: '150px' }}
-      >
-        <option value="">All Precedent</option>
-        <option value="good_law">Good Law Only</option>
-      </select>
+      <label className="input-glass" style={{ 
+        display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', 
+        fontSize: '0.85rem', color: 'var(--text-main)', userSelect: 'none',
+        background: 'rgba(255,255,255,0.05)', padding: '8px 16px', borderRadius: '20px',
+        flex: 1, minWidth: '150px'
+      }}>
+        <input 
+          type="checkbox" 
+          checked={filterStatus === 'good_law'} 
+          onChange={(e) => setFilterStatus(e.target.checked ? 'good_law' : '')}
+          style={{ cursor: 'pointer', accentColor: 'var(--accent)' }}
+        />
+        <span>Good Law Only</span>
+      </label>
     </div>
   );
 
